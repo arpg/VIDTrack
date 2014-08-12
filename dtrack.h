@@ -384,7 +384,7 @@ class DTrack
   public:
     ///////////////////////////////////////////////////////////////////////////
     DTrack():
-      PYRAMID_LEVELS(5)
+      PYRAMID_LEVELS(4)
 #ifdef HAVE_TBB
       , tbb_scheduler_(tbb::task_scheduler_init::deferred)
 #endif
@@ -446,8 +446,8 @@ class DTrack
       const float  max_depth         = 100.0;
 
       // Set pyramid max-iterations and full estimate mask.
-      std::vector<bool>         vec_full_estimate  = {1, 1, 1, 1, 0};
-      std::vector<unsigned int> vec_max_iterations = {1, 2, 3, 4, 5};
+      std::vector<bool>         vec_full_estimate  = {1, 1, 1, 0};
+      std::vector<unsigned int> vec_max_iterations = {1, 2, 3, 4};
 
       // Aux variables.
       Eigen::Matrix6d LHS;
