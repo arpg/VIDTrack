@@ -24,7 +24,7 @@ if(${CMAKE_CXX_COMPILER_ID} STREQUAL "Clang")
     add_definitions(-DHAVE_CLANG)
 endif()
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++0x -Werror")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++0x -fopenmp -Werror")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-deprecated-declarations")
 
 include_directories(${EIGEN3_INCLUDE_DIR})

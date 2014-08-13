@@ -17,6 +17,7 @@
 #include "AuxGUI/AnalyticsView.h"
 #include "AuxGUI/Timer.h"
 #include "AuxGUI/TimerView.h"
+#include "AuxGUI/GLPath.h"
 
 #include "dtrack.h"
 #include "ceres_dense_ba.h"
@@ -116,7 +117,7 @@ int main(int argc, char** argv)
   glClearColor(0, 0, 0, 1);
 
   // Add axis.
-  SceneGraph::GLAxis gl_axis(0.1);
+  SceneGraph::GLAxis gl_axis;
   gl_graph.AddChild(&gl_axis);
 
   // Add grid.
@@ -129,7 +130,7 @@ int main(int argc, char** argv)
 
   pangolin::OpenGlRenderState stacks3d(
         pangolin::ProjectionMatrix(640, 480, 420, 420, 320, 240, near, far),
-        pangolin::ModelViewLookAt(0, 0, -5, 0, 0, 0, pangolin::AxisNegY)
+        pangolin::ModelViewLookAt(-20, 0, -30, 0, 0, 0, pangolin::AxisNegZ)
         );
 
   view_3d.SetHandler(new SceneGraph::HandlerSceneGraph(gl_graph, stacks3d))
