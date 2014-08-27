@@ -77,7 +77,8 @@ int main(int argc, char** argv)
 
   const int image_width = camera.Width();
   const int image_height = camera.Height();
-  std::cout << "- Image Dimensions: " << image_width << "x" << image_height << std::endl;
+  std::cout << "- Image Dimensions: " << image_width <<
+               "x" << image_height << std::endl;
 
 
   ///----- Set up GUI.
@@ -116,6 +117,11 @@ int main(int argc, char** argv)
   // Reset background color to black.
   glClearColor(0, 0, 0, 1);
 
+  // Add path.
+  GLPath gl_path;
+  gl_graph.AddChild(&gl_path);
+  std::vector<Sophus::SE3d>& path_vec = gl_path.GetPathRef();
+
   // Add axis.
   SceneGraph::GLAxis gl_axis;
   gl_graph.AddChild(&gl_axis);
@@ -130,7 +136,7 @@ int main(int argc, char** argv)
 
   pangolin::OpenGlRenderState stacks3d(
         pangolin::ProjectionMatrix(640, 480, 420, 420, 320, 240, near, far),
-        pangolin::ModelViewLookAt(-20, 0, -30, 0, 0, 0, pangolin::AxisNegZ)
+        pangolin::ModelViewLookAt(-5, 0, -8, 0, 0, 0, pangolin::AxisNegZ)
         );
 
   view_3d.SetHandler(new SceneGraph::HandlerSceneGraph(gl_graph, stacks3d))
@@ -147,6 +153,7 @@ int main(int argc, char** argv)
   container.AddDisplay(view_3d);
 
   // GUI aux variables.
+  bool capture_flag;
   bool paused = true;
   bool step_once = false;
 
@@ -215,16 +222,16 @@ int main(int argc, char** argv)
       } else if (clArgs.search("-T")) {
         // Tsukuba convention.
         Eigen::Matrix3d tsukuba_convention;
-        tsukuba_convention << -1, 0, 0,
-            0, -1, 0,
-            0, 0, -1;
+        tsukuba_convention << -1,  0,  0,
+                               0, -1,  0,
+                               0,  0, -1;
         Sophus::SO3d tsukuba_convention_sophus(tsukuba_convention);
         poses.push_back(calibu::ToCoordinateConvention(T,
-                                                       tsukuba_convention_sophus.inverse()));
+                                        tsukuba_convention_sophus.inverse()));
       } else {
         // Robotics convention (default).
         poses.push_back(calibu::ToCoordinateConvention(T,
-                                                       calibu::RdfRobotics.inverse()));
+                                        calibu::RdfRobotics.inverse()));
       }
     }
     fclose(fd);
@@ -249,19 +256,25 @@ int main(int argc, char** argv)
   const char keyShowHide[] = {'1','2','3','4','5','6','7','8','9','0'};
   const char keySave[]     = {'!','@','#','$','%','^','&','*','(',')'};
   for (int ii = 0; ii < container.NumChildren(); ii++) {
-    pangolin::RegisterKeyPressCallback(keyShowHide[ii], [&container,ii]() { container[ii].ToggleShow(); });
-    pangolin::RegisterKeyPressCallback(keySave[ii], [&container,ii]() { container[ii].SaveRenderNow("screenshot", 4); });
+    pangolin::RegisterKeyPressCallback(keyShowHide[ii], [&container,ii]() {
+      container[ii].ToggleShow(); });
+    pangolin::RegisterKeyPressCallback(keySave[ii], [&container,ii]() {
+      container[ii].SaveRenderNow("screenshot", 4); });
   }
 
   pangolin::RegisterKeyPressCallback(' ', [&paused] { paused = !paused; });
-  pangolin::RegisterKeyPressCallback('/', [&step_once] { step_once = !step_once; });
-  pangolin::RegisterKeyPressCallback(pangolin::PANGO_CTRL + 'r', [&ui_reset] { ui_reset = true; });
+  pangolin::RegisterKeyPressCallback(pangolin::PANGO_SPECIAL + GLUT_KEY_RIGHT,
+                                     [&step_once] {
+                                        step_once = !step_once; });
+  pangolin::RegisterKeyPressCallback(pangolin::PANGO_CTRL + 'r',
+                                     [&ui_reset] {
+                                        ui_reset = true; });
 
 
   ///----- Init general variables.
   unsigned int current_frame = 0;
   Sophus::SE3d current_pose;
-  Sophus::SE3d pose_esimate;
+  Sophus::SE3d pose_estimate;
   std::shared_ptr<pb::ImageArray> images = pb::ImageArray::Create();
 
 
@@ -280,6 +293,16 @@ int main(int argc, char** argv)
       timer_view.InitReset();
       analytics_view.InitReset();
 
+      // Reset path.
+      path_vec.clear();
+      // Path expects poses in robotic convetion.
+      {
+        current_pose = Sophus::SE3d();
+        Sophus::SO3d& rotation = current_pose.so3();
+        rotation = calibu::RdfRobotics;
+        path_vec.push_back(current_pose);
+      }
+
       // Re-initialize camera.
       if (!camera.GetDeviceProperty(hal::DeviceDirectory).empty()) {
        camera = hal::Camera(clArgs.follow("", "-cam"));
@@ -289,7 +312,7 @@ int main(int argc, char** argv)
       current_frame = 0;
 
       // Capture first image.
-      camera.Capture(*images);
+      capture_flag = camera.Capture(*images);
       cv::Mat current_image = ConvertAndNormalize(images->at(0)->Mat());
 
       // Reset reference image for DTrack.
@@ -304,59 +327,67 @@ int main(int argc, char** argv)
     ///----- Step forward ...
     if (!paused || pangolin::Pushed(step_once)) {
       //  Capture the new image.
-      camera.Capture(*images);
+      capture_flag = camera.Capture(*images);
 
-      // Convert to float and normalize.
-      cv::Mat current_image = ConvertAndNormalize(images->at(0)->Mat());
+      if (capture_flag == false) {
+        paused = true;
+      } else {
+        // Convert to float and normalize.
+        cv::Mat current_image = ConvertAndNormalize(images->at(0)->Mat());
 
-      // Get pose for this image.
-      timer.Tic("DTrack");
+        // Get pose for this image.
+        timer.Tic("DTrack");
 
-      // RGBD pose estimation.
-      dtrack.SetKeyframe(keyframe_image, keyframe_depth);
-      double dtrack_error = dtrack.Estimate(current_image, pose_esimate);
-      analytics["DTrack RMS"] = dtrack_error;
+        // RGBD pose estimation.
+        pose_estimate = Sophus::SE3d(); // Reset pose estimate.
+        dtrack.SetKeyframe(keyframe_image, keyframe_depth);
+        double dtrack_error = dtrack.Estimate(current_image, pose_estimate);
+        analytics["DTrack RMS"] = dtrack_error;
 
-      // Calculate pose error.
-      Sophus::SE3d gt_pose = poses[current_frame-1].inverse()
-          * poses[current_frame];
-      analytics["DTrack Error"] =
-          (Sophus::SE3::log(pose_esimate.inverse() * gt_pose).head(3).norm()
-           / Sophus::SE3::log(gt_pose).head(3).norm()) * 100.0;
-      timer.Toc("DTrack");
+        // Calculate pose error.
+        Sophus::SE3d gt_pose = poses[current_frame-1].inverse()
+            * poses[current_frame];
+        analytics["DTrack Error"] =
+            (Sophus::SE3::log(pose_estimate.inverse() * gt_pose).head(3).norm()
+             / Sophus::SE3::log(gt_pose).head(3).norm()) * 100.0;
+        timer.Toc("DTrack");
 
-      // If using ground-truth poses, override pose estimate with GT pose.
-      if (ui_use_gt_poses) {
-        pose_esimate = gt_pose;
+        // If using ground-truth poses, override pose estimate with GT pose.
+        if (ui_use_gt_poses) {
+          pose_estimate = gt_pose;
+        }
+
+        // Update pose.
+        current_pose = current_pose * pose_estimate;
+        path_vec.push_back(pose_estimate);
+
+        // Reset reference image for DTrack.
+        keyframe_image = current_image;
+        keyframe_depth = images->at(1)->Mat();
+
+        // Increment frame counter.
+        current_frame++;
+
+        // Update analytics.
+        analytics_view.Update(analytics);
       }
-
-      // Update pose.
-      current_pose = current_pose * pose_esimate;
-
-      // Reset reference image for DTrack.
-      keyframe_image = current_image;
-      keyframe_depth = images->at(1)->Mat();
-
-      // Increment frame counter.
-      current_frame++;
-
-      // Update analytics.
-      analytics_view.Update(analytics);
     }
 
 
     /////////////////////////////////////////////////////////////////////////////
     ///---- Render
-    glClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT );
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    image_view.SetImage(images->at(0)->data(), image_width, image_height,
-                        GL_RGB8, GL_LUMINANCE, GL_UNSIGNED_BYTE);
+    if (capture_flag) {
+      image_view.SetImage(images->at(0)->data(), image_width, image_height,
+                          GL_RGB8, GL_LUMINANCE, GL_UNSIGNED_BYTE);
 
-    depth_view.SetImage(images->at(1)->data(), image_width, image_height, GL_RGB8,
-                        GL_LUMINANCE, GL_FLOAT, true);
+      depth_view.SetImage(images->at(1)->data(), image_width, image_height,
+                          GL_RGB8, GL_LUMINANCE, GL_FLOAT, true);
+    }
 
-    gl_axis.SetPose(pose_esimate.matrix());
-    stacks3d.Follow(pose_esimate.matrix());
+    gl_axis.SetPose(current_pose.matrix());
+    stacks3d.Follow(current_pose.matrix());
 
     // Sleep a bit.
     usleep(1e6/60.0);
