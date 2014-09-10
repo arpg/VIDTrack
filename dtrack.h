@@ -16,9 +16,7 @@
  * limitations under the License.
  */
 
-
-#ifndef DTRACK_H_
-#define DTRACK_H_
+#pragma once
 
 #include <algorithm>
 #include <vector>
@@ -763,5 +761,3 @@ class DTrack
     std::vector<calibu::CameraModelGeneric<double> > ref_depth_cam_model_;
     Sophus::SE3d                                     Tgd_;
 };
-
-#endif  // DTRACK_H_

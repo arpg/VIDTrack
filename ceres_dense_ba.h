@@ -1,7 +1,7 @@
 /*
- * Copyright (c) 2013  Juan M. Falquez,
+ * Copyright (c) 2014  Juan M. Falquez,
  *                     Nima Keivan
- *                     George Washington University
+ *                     University of Colorado
  *
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,8 +17,7 @@
  * limitations under the License.
  */
 
-#ifndef CERES_DENSE_BA_H_
-#define CERES_DENSE_BA_H_
+#pragma once
 
 #include <ceres/ceres.h>
 #include <Eigen/Eigen>
@@ -282,5 +281,3 @@ struct SmoothnessTerm {
   const double              g_beta_;
   const double              epsilon_;
 };
-
-#endif  // CERES_DENSE_BA_H_

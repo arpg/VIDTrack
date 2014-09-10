@@ -13,6 +13,9 @@
 #include <calibu/Calibu.h>
 #include <calibu/calib/LocalParamSe3.h>
 #include <calibu/calib/CostFunctionAndParams.h>
+#include <ba/BundleAdjuster.h>
+#include <ba/Types.h>
+#include <ba/InterpolationBuffer.h>
 
 #include "AuxGUI/AnalyticsView.h"
 #include "AuxGUI/Timer.h"
@@ -67,13 +70,13 @@ int main(int argc, char** argv)
   std::cout << "Starting DEVIL ..." << std::endl;
 
   ///----- Initialize Camera.
-  GetPot clArgs(argc, argv);
-  if (!clArgs.search("-cam")) {
+  GetPot cl_args(argc, argv);
+  if (!cl_args.search("-cam")) {
     std::cerr << "Camera arguments missing!" << std::endl;
     exit(EXIT_FAILURE);
   }
 
-  hal::Camera camera(clArgs.follow("", "-cam"));
+  hal::Camera camera(cl_args.follow("", "-cam"));
 
   const int image_width = camera.Width();
   const int image_height = camera.Height();
@@ -87,8 +90,10 @@ int main(int argc, char** argv)
   // Set up panel.
   const unsigned int panel_size = 180;
   pangolin::CreatePanel("ui").SetBounds(0, 1, 0, pangolin::Attach::Pix(panel_size));
+  pangolin::Var<bool>  ui_camera_follow("ui.Camera Follow", true, true);
   pangolin::Var<bool>  ui_reset("ui.Reset", true, false);
-  pangolin::Var<bool>  ui_use_gt_poses("ui.Use GT Poses", true, true);
+  pangolin::Var<bool>  ui_use_gt_poses("ui.Use GT Poses", false, true);
+  pangolin::Var<bool>  ui_use_constant_velocity("ui.Use Const Vel Model", false, true);
 
   // Set up container.
   pangolin::View& container = pangolin::CreateDisplay();
@@ -97,15 +102,15 @@ int main(int argc, char** argv)
   pangolin::DisplayBase().AddDisplay(container);
 
   // Set up timer.
-  Timer timer;
+  Timer     timer;
   TimerView timer_view;
   timer_view.SetBounds(0.5, 1, 0.65, 1.0);
   pangolin::DisplayBase().AddDisplay(timer_view);
   timer_view.InitReset();
 
   // Set up analytics.
-  std::map<std::string, float> analytics;
-  AnalyticsView analytics_view;
+  std::map<std::string, float>  analytics;
+  AnalyticsView                 analytics_view;
   analytics_view.SetBounds(0, 0.5, 0.65, 1.0);
   pangolin::DisplayBase().AddDisplay(analytics_view);
   analytics_view.InitReset();
@@ -120,7 +125,7 @@ int main(int argc, char** argv)
   // Add path.
   GLPath gl_path;
   gl_graph.AddChild(&gl_path);
-  std::vector<Sophus::SE3d>& path_vec = gl_path.GetPathRef();
+  std::vector<Sophus::SE3d>& gl_path_vec = gl_path.GetPathRef();
 
   // Add axis.
   SceneGraph::GLAxis gl_axis;
@@ -163,11 +168,11 @@ int main(int argc, char** argv)
   if (camera.GetDeviceProperty(hal::DeviceDirectory).empty() == false) {
     std::cout<<"- Loaded camera: " <<
                camera.GetDeviceProperty(hal::DeviceDirectory) + '/'
-               + clArgs.follow("cameras.xml", "-cmod") << std::endl;
+               + cl_args.follow("cameras.xml", "-cmod") << std::endl;
     rig = calibu::ReadXmlRig(camera.GetDeviceProperty(hal::DeviceDirectory)
-                             + '/' + clArgs.follow("cameras.xml", "-cmod"));
+                             + '/' + cl_args.follow("cameras.xml", "-cmod"));
   } else {
-    rig = calibu::ReadXmlRig(clArgs.follow("cameras.xml", "-cmod"));
+    rig = calibu::ReadXmlRig(cl_args.follow("cameras.xml", "-cmod"));
   }
   Eigen::Matrix3f K = rig.cameras[0].camera.K().cast<float>();
   Eigen::Matrix3f Kinv = K.inverse();
@@ -180,10 +185,18 @@ int main(int argc, char** argv)
   dtrack.SetParams(rig.cameras[0].camera, rig.cameras[0].camera,
       rig.cameras[0].camera, Sophus::SE3d());
 
+  ///----- Init BA stuff.
+  typedef ba::ImuMeasurementT<double>               ImuMeasurement;
+  ba::InterpolationBufferT<ImuMeasurement, double>  imu_buffer;
+  ba::BundleAdjuster<double,0,9,0>                  bundle_adjuster;
+  ba::Options<double>                               options;
+  options.trust_region_size = 100000;
+  bundle_adjuster.Init(options);
+
   ///----- Load file of ground truth poses (required).
   std::vector<Sophus::SE3d> poses;
   {
-    std::string pose_file = clArgs.follow("", "-poses");
+    std::string pose_file = cl_args.follow("", "-poses");
     if (pose_file.empty()) {
       std::cerr << "- NOTE: No poses file given. It is required!" << std::endl;
       exit(EXIT_FAILURE);
@@ -194,10 +207,10 @@ int main(int argc, char** argv)
     float x, y, z, p, q, r;
 
     std::cout << "- Loading pose file: '" << pose_file << "'" << std::endl;
-    if (clArgs.search("-V")) {
+    if (cl_args.search("-V")) {
       // Vision convention.
       std::cout << "- NOTE: File is being read in VISION frame." << std::endl;
-    } else if (clArgs.search("-T")) {
+    } else if (cl_args.search("-T")) {
       // Tsukuba convention.
       std::cout << "- NOTE: File is being read in TSUKUBA frame." << std::endl;
     } else {
@@ -216,10 +229,10 @@ int main(int argc, char** argv)
       Sophus::SE3d T(SceneGraph::GLCart2T(pose));
 
       // Flag to load poses as a particular convention.
-      if (clArgs.search("-V")) {
+      if (cl_args.search("-V")) {
         // Vision convention.
         poses.push_back(T);
-      } else if (clArgs.search("-T")) {
+      } else if (cl_args.search("-T")) {
         // Tsukuba convention.
         Eigen::Matrix3d tsukuba_convention;
         tsukuba_convention << -1,  0,  0,
@@ -234,8 +247,62 @@ int main(int argc, char** argv)
                                         calibu::RdfRobotics.inverse()));
       }
     }
+    std::cout << "- NOTE: " << poses.size() << " poses loaded." << std::endl;
     fclose(fd);
   }
+
+  ///----- Load file of IMU measurements (required).
+  std::vector<Eigen::Matrix<double, 7, 1>> imu;
+  {
+    std::string imu_file = cl_args.follow("", "-imu");
+    if (imu_file.empty()) {
+      std::cerr << "- NOTE: No IMU file given. It is required!" << std::endl;
+      exit(EXIT_FAILURE);
+    }
+    imu_file = camera.GetDeviceProperty(hal::DeviceDirectory) + "/" + imu_file;
+    FILE* fd = fopen(imu_file.c_str(), "r");
+    Eigen::Matrix<double, 7, 1> imu_measurement;
+    float timestamp, accelX, accelY, accelZ, gyroX, gyroY, gyroZ;
+
+    std::cout << "- Loading IMU measurements file: '" << imu_file << "'" << std::endl;
+
+    while (fscanf(fd, "%f\t%f\t%f\t%f\t%f\t%f\t%f", &timestamp, &accelX, &accelY,
+                  &accelZ, &gyroX, &gyroY, &gyroZ) != EOF) {
+      imu_measurement(0) = timestamp;
+      imu_measurement(1) = accelX;
+      imu_measurement(2) = accelY;
+      imu_measurement(3) = accelZ;
+      imu_measurement(4) = gyroX;
+      imu_measurement(5) = gyroY;
+      imu_measurement(6) = gyroZ;
+
+      imu.push_back(imu_measurement);
+    }
+    std::cout << "- NOTE: " << imu.size() << " IMU measurements loaded." << std::endl;
+    fclose(fd);
+  }
+
+  ///----- Load image timestamps.
+  std::vector<double> image_timestamps;
+  {
+    std::string timestamps_file = cl_args.follow("", "-timestamps");
+    if (timestamps_file.empty()) {
+      std::cerr << "- NOTE: No timestamps file given. It is required!" << std::endl;
+      exit(EXIT_FAILURE);
+    }
+    timestamps_file = camera.GetDeviceProperty(hal::DeviceDirectory) + "/" + timestamps_file;
+    FILE* fd = fopen(timestamps_file.c_str(), "r");
+    double timestamp;
+
+    std::cout << "- Loading timestamps file: '" << timestamps_file << "'" << std::endl;
+
+    while (fscanf(fd, "%lf", &timestamp) != EOF) {
+      image_timestamps.push_back(timestamp);
+    }
+    fclose(fd);
+    std::cout << "- NOTE: " << image_timestamps.size() << " timestamps loaded." << std::endl;
+  }
+
 
   ///----- Register callbacks.
   // Hide/Show panel.
@@ -294,18 +361,18 @@ int main(int argc, char** argv)
       analytics_view.InitReset();
 
       // Reset path.
-      path_vec.clear();
+      gl_path_vec.clear();
       // Path expects poses in robotic convetion.
       {
         current_pose = Sophus::SE3d();
         Sophus::SO3d& rotation = current_pose.so3();
         rotation = calibu::RdfRobotics;
-        path_vec.push_back(current_pose);
+        gl_path_vec.push_back(current_pose);
       }
 
       // Re-initialize camera.
       if (!camera.GetDeviceProperty(hal::DeviceDirectory).empty()) {
-       camera = hal::Camera(clArgs.follow("", "-cam"));
+       camera = hal::Camera(cl_args.follow("", "-cam"));
       }
 
       // Reset frame counter.
@@ -318,6 +385,9 @@ int main(int argc, char** argv)
       // Reset reference image for DTrack.
       keyframe_image = current_image;
       keyframe_depth = images->at(1)->Mat();
+
+      // Add initial pose for BA.
+//      bundle_adjuster.AddPose(current_pose , true, timestamp);
 
       // Increment frame counter.
       current_frame++;
@@ -338,8 +408,12 @@ int main(int argc, char** argv)
         // Get pose for this image.
         timer.Tic("DTrack");
 
+        // Reset pose estimate to identity if no constant velocity model is used.
+        if (!ui_use_constant_velocity) {
+          pose_estimate = Sophus::SE3d();
+        }
+
         // RGBD pose estimation.
-        pose_estimate = Sophus::SE3d(); // Reset pose estimate.
         dtrack.SetKeyframe(keyframe_image, keyframe_depth);
         double dtrack_error = dtrack.Estimate(current_image, pose_estimate);
         analytics["DTrack RMS"] = dtrack_error;
@@ -359,7 +433,7 @@ int main(int argc, char** argv)
 
         // Update pose.
         current_pose = current_pose * pose_estimate;
-        path_vec.push_back(pose_estimate);
+        gl_path_vec.push_back(pose_estimate);
 
         // Reset reference image for DTrack.
         keyframe_image = current_image;
@@ -387,7 +461,10 @@ int main(int argc, char** argv)
     }
 
     gl_axis.SetPose(current_pose.matrix());
-    stacks3d.Follow(current_pose.matrix());
+
+    if (ui_camera_follow) {
+      stacks3d.Follow(current_pose.matrix());
+    }
 
     // Sleep a bit.
     usleep(1e6/60.0);
