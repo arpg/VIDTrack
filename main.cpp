@@ -340,6 +340,7 @@ int main(int argc, char** argv)
 
   ///----- Init general variables.
   unsigned int current_frame = 0;
+  Sophus::SE3d real_pose;
   Sophus::SE3d current_pose;
   Sophus::SE3d pose_estimate;
   std::shared_ptr<pb::ImageArray> images = pb::ImageArray::Create();
@@ -364,9 +365,12 @@ int main(int argc, char** argv)
       gl_path_vec.clear();
       // Path expects poses in robotic convetion.
       {
+        real_pose = Sophus::SE3d();
         current_pose = Sophus::SE3d();
         Sophus::SO3d& rotation = current_pose.so3();
+        Sophus::SO3d& rotation_real = real_pose.so3();
         rotation = calibu::RdfRobotics;
+        rotation_real = calibu::RdfRobotics;
         gl_path_vec.push_back(current_pose);
       }
 
@@ -385,9 +389,6 @@ int main(int argc, char** argv)
       // Reset reference image for DTrack.
       keyframe_image = current_image;
       keyframe_depth = images->at(1)->Mat();
-
-      // Add initial pose for BA.
-//      bundle_adjuster.AddPose(current_pose , true, timestamp);
 
       // Increment frame counter.
       current_frame++;
@@ -421,9 +422,6 @@ int main(int argc, char** argv)
         // Calculate pose error.
         Sophus::SE3d gt_pose = poses[current_frame-1].inverse()
             * poses[current_frame];
-        analytics["DTrack Error"] =
-            (Sophus::SE3::log(pose_estimate.inverse() * gt_pose).head(3).norm()
-             / Sophus::SE3::log(gt_pose).head(3).norm()) * 100.0;
         timer.Toc("DTrack");
 
         // If using ground-truth poses, override pose estimate with GT pose.
@@ -432,8 +430,13 @@ int main(int argc, char** argv)
         }
 
         // Update pose.
+        real_pose = real_pose * gt_pose;
         current_pose = current_pose * pose_estimate;
         gl_path_vec.push_back(pose_estimate);
+
+        // Update error.
+        analytics["Path Error"] =
+            Sophus::SE3::log(current_pose.inverse() * real_pose).head(3).norm();
 
         // Reset reference image for DTrack.
         keyframe_image = current_image;
