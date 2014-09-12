@@ -94,6 +94,7 @@ int main(int argc, char** argv)
   pangolin::Var<bool>  ui_reset("ui.Reset", true, false);
   pangolin::Var<bool>  ui_use_gt_poses("ui.Use GT Poses", false, true);
   pangolin::Var<bool>  ui_use_constant_velocity("ui.Use Const Vel Model", false, true);
+  pangolin::Var<bool>  ui_use_imu_estimates("ui.Use IMU Estimates", false, true);
 
   // Set up container.
   pangolin::View& container = pangolin::CreateDisplay();
@@ -188,10 +189,13 @@ int main(int argc, char** argv)
   ///----- Init BA stuff.
   typedef ba::ImuMeasurementT<double>               ImuMeasurement;
   ba::InterpolationBufferT<ImuMeasurement, double>  imu_buffer;
-  ba::BundleAdjuster<double,0,9,0>                  bundle_adjuster;
+  ba::BundleAdjuster<double, 0, 9, 0>               bundle_adjuster;
   ba::Options<double>                               options;
   options.trust_region_size = 100000;
   bundle_adjuster.Init(options);
+  Eigen::Matrix<double, 3, 1> gravity;
+  gravity << 0, 0, 9.8;
+  bundle_adjuster.SetGravity(gravity);
 
   ///----- Load file of ground truth poses (required).
   std::vector<Sophus::SE3d> poses;
@@ -252,7 +256,6 @@ int main(int argc, char** argv)
   }
 
   ///----- Load file of IMU measurements (required).
-  std::vector<Eigen::Matrix<double, 7, 1>> imu;
   {
     std::string imu_file = cl_args.follow("", "-imu");
     if (imu_file.empty()) {
@@ -261,24 +264,22 @@ int main(int argc, char** argv)
     }
     imu_file = camera.GetDeviceProperty(hal::DeviceDirectory) + "/" + imu_file;
     FILE* fd = fopen(imu_file.c_str(), "r");
-    Eigen::Matrix<double, 7, 1> imu_measurement;
     float timestamp, accelX, accelY, accelZ, gyroX, gyroY, gyroZ;
 
     std::cout << "- Loading IMU measurements file: '" << imu_file << "'" << std::endl;
 
+    int imu_count = 0;
     while (fscanf(fd, "%f\t%f\t%f\t%f\t%f\t%f\t%f", &timestamp, &accelX, &accelY,
                   &accelZ, &gyroX, &gyroY, &gyroZ) != EOF) {
-      imu_measurement(0) = timestamp;
-      imu_measurement(1) = accelX;
-      imu_measurement(2) = accelY;
-      imu_measurement(3) = accelZ;
-      imu_measurement(4) = gyroX;
-      imu_measurement(5) = gyroY;
-      imu_measurement(6) = gyroZ;
 
-      imu.push_back(imu_measurement);
+      Eigen::Vector3d a(accelX, accelY, accelZ);
+      Eigen::Vector3d w(gyroX, gyroY, gyroZ);
+
+      ImuMeasurement imu(w, a, timestamp);
+      imu_buffer.AddElement(imu);
+      imu_count++;
     }
-    std::cout << "- NOTE: " << imu.size() << " IMU measurements loaded." << std::endl;
+    std::cout << "- NOTE: " << imu_count << " IMU measurements loaded." << std::endl;
     fclose(fd);
   }
 
@@ -337,10 +338,9 @@ int main(int argc, char** argv)
                                      [&ui_reset] {
                                         ui_reset = true; });
 
-
   ///----- Init general variables.
-  unsigned int current_frame = 0;
-  Sophus::SE3d real_pose;
+  unsigned int frame_index = 0;
+  Sophus::SE3d gt_pose;
   Sophus::SE3d current_pose;
   Sophus::SE3d pose_estimate;
   std::shared_ptr<pb::ImageArray> images = pb::ImageArray::Create();
@@ -365,10 +365,10 @@ int main(int argc, char** argv)
       gl_path_vec.clear();
       // Path expects poses in robotic convetion.
       {
-        real_pose = Sophus::SE3d();
+        gt_pose = Sophus::SE3d();
         current_pose = Sophus::SE3d();
         Sophus::SO3d& rotation = current_pose.so3();
-        Sophus::SO3d& rotation_real = real_pose.so3();
+        Sophus::SO3d& rotation_real = gt_pose.so3();
         rotation = calibu::RdfRobotics;
         rotation_real = calibu::RdfRobotics;
         gl_path_vec.push_back(current_pose);
@@ -380,7 +380,7 @@ int main(int argc, char** argv)
       }
 
       // Reset frame counter.
-      current_frame = 0;
+      frame_index = 0;
 
       // Capture first image.
       capture_flag = camera.Capture(*images);
@@ -390,8 +390,12 @@ int main(int argc, char** argv)
       keyframe_image = current_image;
       keyframe_depth = images->at(1)->Mat();
 
+      // Add initial pose for BA.
+      double timestamp = image_timestamps[frame_index];
+      bundle_adjuster.AddPose(current_pose, true, timestamp);
+
       // Increment frame counter.
-      current_frame++;
+      frame_index++;
     }
 
 
@@ -414,36 +418,67 @@ int main(int argc, char** argv)
           pose_estimate = Sophus::SE3d();
         }
 
+        // Get IMU measurements between previous frame and current frame.
+        std::vector<ImuMeasurement> imu_measurements =
+            imu_buffer.GetRange(image_timestamps[frame_index-1],
+            image_timestamps[frame_index]);
+
+        // Integrate IMU to get an initial pose estimate to seed VO.
+        if (ui_use_imu_estimates) {
+
+          if (imu_measurements.size() == 0) {
+            std::cerr << "Could not find imu measurements between : " <<
+                         image_timestamps[frame_index-1] << " and " <<
+                         image_timestamps[frame_index] << std::endl;
+            exit(EXIT_FAILURE);
+          }
+
+          ba::PoseT<double> last_pose = bundle_adjuster.GetPose(frame_index-1);
+          std::vector<ba::ImuPoseT<double>> imu_poses;
+
+          ba::ImuPoseT<double> new_pose =
+              decltype(bundle_adjuster)::ImuResidual::IntegrateResidual(last_pose,
+              imu_measurements, last_pose.b.head<3>(), last_pose.b.tail<3>(),
+              gravity, imu_poses);
+
+          pose_estimate = new_pose.t_wp;
+        }
+
         // RGBD pose estimation.
         dtrack.SetKeyframe(keyframe_image, keyframe_depth);
         double dtrack_error = dtrack.Estimate(current_image, pose_estimate);
         analytics["DTrack RMS"] = dtrack_error;
 
         // Calculate pose error.
-        Sophus::SE3d gt_pose = poses[current_frame-1].inverse()
-            * poses[current_frame];
+        Sophus::SE3d gt_relative_pose = poses[frame_index-1].inverse()
+            * poses[frame_index];
         timer.Toc("DTrack");
 
         // If using ground-truth poses, override pose estimate with GT pose.
         if (ui_use_gt_poses) {
-          pose_estimate = gt_pose;
+          pose_estimate = gt_relative_pose;
         }
 
         // Update pose.
-        real_pose = real_pose * gt_pose;
+        gt_pose = gt_pose * gt_relative_pose;
         current_pose = current_pose * pose_estimate;
         gl_path_vec.push_back(pose_estimate);
 
+        // Push new pose to BA.
+        double timestamp = image_timestamps[frame_index];
+        bundle_adjuster.AddPose(current_pose, true, timestamp);
+        bundle_adjuster.AddImuResidual(frame_index-1, frame_index, imu_measurements);
+
         // Update error.
         analytics["Path Error"] =
-            Sophus::SE3::log(current_pose.inverse() * real_pose).head(3).norm();
+            Sophus::SE3::log(current_pose.inverse() * gt_pose).head(3).norm();
 
         // Reset reference image for DTrack.
         keyframe_image = current_image;
         keyframe_depth = images->at(1)->Mat();
 
         // Increment frame counter.
-        current_frame++;
+        frame_index++;
 
         // Update analytics.
         analytics_view.Update(analytics);
