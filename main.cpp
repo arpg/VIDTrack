@@ -165,34 +165,39 @@ int main(int argc, char** argv)
 
 
   ///----- Load camera model.
-  calibu::CameraRig rig;
+  calibu::CameraRig old_rig;
   if (camera.GetDeviceProperty(hal::DeviceDirectory).empty() == false) {
     std::cout<<"- Loaded camera: " <<
                camera.GetDeviceProperty(hal::DeviceDirectory) + '/'
                + cl_args.follow("cameras.xml", "-cmod") << std::endl;
-    rig = calibu::ReadXmlRig(camera.GetDeviceProperty(hal::DeviceDirectory)
+    old_rig = calibu::ReadXmlRig(camera.GetDeviceProperty(hal::DeviceDirectory)
                              + '/' + cl_args.follow("cameras.xml", "-cmod"));
   } else {
-    rig = calibu::ReadXmlRig(cl_args.follow("cameras.xml", "-cmod"));
+    old_rig = calibu::ReadXmlRig(cl_args.follow("cameras.xml", "-cmod"));
   }
-  Eigen::Matrix3f K = rig.cameras[0].camera.K().cast<float>();
+  Eigen::Matrix3f K = old_rig.cameras[0].camera.K().cast<float>();
   Eigen::Matrix3f Kinv = K.inverse();
   std::cout << "-- K is: " << std::endl << K << std::endl;
+
+  // Convert old rig to new rig.
+  calibu::Rig<double> rig;
+  calibu::CreateFromOldRig(&old_rig, &rig);
 
   ///----- Init DTrack stuff.
   cv::Mat keyframe_image, keyframe_depth;
   DTrack dtrack;
   dtrack.Init();
-  dtrack.SetParams(rig.cameras[0].camera, rig.cameras[0].camera,
-      rig.cameras[0].camera, Sophus::SE3d());
+  dtrack.SetParams(old_rig.cameras[0].camera, old_rig.cameras[0].camera,
+      old_rig.cameras[0].camera, Sophus::SE3d());
 
   ///----- Init BA stuff.
   typedef ba::ImuMeasurementT<double>               ImuMeasurement;
   ba::InterpolationBufferT<ImuMeasurement, double>  imu_buffer;
-  ba::BundleAdjuster<double, 0, 9, 0>               bundle_adjuster;
+  ba::BundleAdjuster<double, 1, 15, 0>              bundle_adjuster;
   ba::Options<double>                               options;
   options.trust_region_size = 100000;
   bundle_adjuster.Init(options);
+  bundle_adjuster.AddCamera(rig.cameras_[0], rig.t_wc_[0]);
   Eigen::Matrix<double, 3, 1> gravity;
   gravity << 0, 0, 9.8;
   bundle_adjuster.SetGravity(gravity);
@@ -467,7 +472,13 @@ int main(int argc, char** argv)
         // Push new pose to BA.
         double timestamp = image_timestamps[frame_index];
         bundle_adjuster.AddPose(current_pose, true, timestamp);
+        bundle_adjuster.AddBinaryConstraint(frame_index-1, frame_index,
+                                            pose_estimate);
         bundle_adjuster.AddImuResidual(frame_index-1, frame_index, imu_measurements);
+
+        if (frame_index > 5) {
+          bundle_adjuster.Solve(25, 0.2);
+        }
 
         // Update error.
         analytics["Path Error"] =
