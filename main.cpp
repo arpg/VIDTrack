@@ -20,7 +20,8 @@
 #include "AuxGUI/AnalyticsView.h"
 #include "AuxGUI/Timer.h"
 #include "AuxGUI/TimerView.h"
-#include "AuxGUI/GLPath.h"
+#include "AuxGUI/GLPathRel.h"
+#include "AuxGUI/GLPathAbs.h"
 
 #include "dtrack.h"
 #include "ceres_dense_ba.h"
@@ -95,6 +96,9 @@ int main(int argc, char** argv)
   pangolin::Var<bool>  ui_use_gt_poses("ui.Use GT Poses", false, true);
   pangolin::Var<bool>  ui_use_constant_velocity("ui.Use Const Vel Model", false, true);
   pangolin::Var<bool>  ui_use_imu_estimates("ui.Use IMU Estimates", false, true);
+  pangolin::Var<bool>  ui_update_ba_poses("ui.Update BA Poses", true, false);
+  pangolin::Var<bool>  ui_show_orig_path("ui.Show Original Path", true, true);
+  pangolin::Var<bool>  ui_show_ba_path("ui.Show BA Path", true, true);
 
   // Set up container.
   pangolin::View& container = pangolin::CreateDisplay();
@@ -124,16 +128,24 @@ int main(int argc, char** argv)
   glClearColor(0, 0, 0, 1);
 
   // Add path.
-  GLPath gl_path;
-  gl_graph.AddChild(&gl_path);
-  std::vector<Sophus::SE3d>& gl_path_vec = gl_path.GetPathRef();
-
-  // Add axis.
-  SceneGraph::GLAxis gl_axis;
-  gl_graph.AddChild(&gl_axis);
+  GLPathRel gl_path_orig;
+  GLPathAbs gl_path_ba;
+  gl_path_orig.SetPoseDisplay(5);
+  gl_path_ba.SetPoseDisplay(5);
+  gl_path_ba.SetLineColor(0, 1.0, 0);
+  gl_graph.AddChild(&gl_path_orig);
+  gl_graph.AddChild(&gl_path_ba);
+  std::vector<Sophus::SE3d>& path_orig_vec = gl_path_orig.GetPathRef();
+  std::vector<Sophus::SE3d>& path_ba_vec = gl_path_ba.GetPathRef();
 
   // Add grid.
   SceneGraph::GLGrid gl_grid(50, 1);
+  {
+    Sophus::SE3d vision_RDF;
+    Sophus::SO3d& rotation = vision_RDF.so3();
+    rotation = calibu::RdfRobotics.inverse();
+    gl_grid.SetPose(vision_RDF.matrix());
+  }
   gl_graph.AddChild(&gl_grid);
 
   pangolin::View view_3d;
@@ -142,7 +154,7 @@ int main(int argc, char** argv)
 
   pangolin::OpenGlRenderState stacks3d(
         pangolin::ProjectionMatrix(640, 480, 420, 420, 320, 240, near, far),
-        pangolin::ModelViewLookAt(-5, 0, -8, 0, 0, 0, pangolin::AxisNegZ)
+        pangolin::ModelViewLookAt(0, -8, -5, 0, 0, 0, pangolin::AxisNegY)
         );
 
   view_3d.SetHandler(new SceneGraph::HandlerSceneGraph(gl_graph, stacks3d))
@@ -197,9 +209,13 @@ int main(int argc, char** argv)
   ba::Options<double>                               options;
   options.trust_region_size = 100000;
   bundle_adjuster.Init(options);
-  bundle_adjuster.AddCamera(rig.cameras_[0], rig.t_wc_[0]);
+  Eigen::Matrix4d eTic = SceneGraph::GLCart2T(0, 0, 0, M_PI/2.0, -M_PI/2.0, 0);
+//  Eigen::Matrix4d eTic = SceneGraph::GLCart2T(0, 0, 0, M_PI/2.0, M_PI/2.0, 0);
+  Sophus::SE3d Tic(eTic);
+  bundle_adjuster.AddCamera(rig.cameras_[0], Tic);
+//  bundle_adjuster.AddCamera(rig.cameras_[0], rig.t_wc_[0]);
   Eigen::Matrix<double, 3, 1> gravity;
-  gravity << 0, 0, 9.8;
+  gravity << 0, 9.8, 0;
   bundle_adjuster.SetGravity(gravity);
 
   ///----- Load file of ground truth poses (required).
@@ -342,6 +358,10 @@ int main(int argc, char** argv)
   pangolin::RegisterKeyPressCallback(pangolin::PANGO_CTRL + 'r',
                                      [&ui_reset] {
                                         ui_reset = true; });
+  pangolin::RegisterKeyPressCallback('o',
+                                     [&bundle_adjuster, &ui_update_ba_poses] {
+                                      bundle_adjuster.Solve(25, 0.2);
+                                      ui_update_ba_poses = true; });
 
   ///----- Init general variables.
   unsigned int frame_index = 0;
@@ -367,17 +387,8 @@ int main(int argc, char** argv)
       analytics_view.InitReset();
 
       // Reset path.
-      gl_path_vec.clear();
-      // Path expects poses in robotic convetion.
-      {
-        gt_pose = Sophus::SE3d();
-        current_pose = Sophus::SE3d();
-        Sophus::SO3d& rotation = current_pose.so3();
-        Sophus::SO3d& rotation_real = gt_pose.so3();
-        rotation = calibu::RdfRobotics;
-        rotation_real = calibu::RdfRobotics;
-        gl_path_vec.push_back(current_pose);
-      }
+      path_orig_vec.clear();
+      path_ba_vec.clear();
 
       // Re-initialize camera.
       if (!camera.GetDeviceProperty(hal::DeviceDirectory).empty()) {
@@ -386,6 +397,9 @@ int main(int argc, char** argv)
 
       // Reset frame counter.
       frame_index = 0;
+
+      // Reset pose.
+      current_pose = Sophus::SE3d();
 
       // Capture first image.
       capture_flag = camera.Capture(*images);
@@ -467,7 +481,7 @@ int main(int argc, char** argv)
         // Update pose.
         gt_pose = gt_pose * gt_relative_pose;
         current_pose = current_pose * pose_estimate;
-        gl_path_vec.push_back(pose_estimate);
+        path_orig_vec.push_back(pose_estimate);
 
         // Push new pose to BA.
         double timestamp = image_timestamps[frame_index];
@@ -476,9 +490,6 @@ int main(int argc, char** argv)
                                             pose_estimate);
         bundle_adjuster.AddImuResidual(frame_index-1, frame_index, imu_measurements);
 
-        if (frame_index > 5) {
-          bundle_adjuster.Solve(25, 0.2);
-        }
 
         // Update error.
         analytics["Path Error"] =
@@ -496,6 +507,19 @@ int main(int argc, char** argv)
       }
     }
 
+    ///----- Draw BA poses ...
+    if (pangolin::Pushed(ui_update_ba_poses)) {
+
+      path_ba_vec.clear();
+
+      for (size_t ii = 0; ii < frame_index-1; ++ii) {
+        ba::PoseT<double> pose = bundle_adjuster.GetPose(ii);
+        path_ba_vec.push_back(pose.t_wp);
+      }
+
+
+    }
+
 
     /////////////////////////////////////////////////////////////////////////////
     ///---- Render
@@ -509,11 +533,12 @@ int main(int argc, char** argv)
                           GL_RGB8, GL_LUMINANCE, GL_FLOAT, true);
     }
 
-    gl_axis.SetPose(current_pose.matrix());
-
     if (ui_camera_follow) {
       stacks3d.Follow(current_pose.matrix());
     }
+
+    gl_path_orig.SetVisible(ui_show_orig_path);
+    gl_path_ba.SetVisible(ui_show_ba_path);
 
     // Sleep a bit.
     usleep(1e6/60.0);
