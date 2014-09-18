@@ -131,6 +131,7 @@ class PoseRefine
       min_depth_(min_depth),
       max_depth_(max_depth)
     {
+      hessian.setZero();
       LHS.setZero();
       RHS.setZero();
     }
@@ -155,6 +156,7 @@ class PoseRefine
       min_depth_(x.min_depth_),
       max_depth_(x.max_depth_)
     {
+      hessian.setZero();
       LHS.setZero();
       RHS.setZero();
     }
@@ -311,9 +313,10 @@ class PoseRefine
         const double w = _NormTukey(y, norm_param_);
         //      const double w = _NormL1(y, NormC);
 
-        LHS                      += J*J.transpose()*w;
-        RHS                      += J*y*w;
-        error                    += y*y;
+        hessian     += J*J.transpose();
+        LHS         += J*J.transpose()*w;
+        RHS         += J*y*w;
+        error       += y*y;
         num_obs++;
       }
     }
@@ -321,10 +324,11 @@ class PoseRefine
     ///////////////////////////////////////////////////////////////////////////
     void join(const PoseRefine& other)
     {
-      LHS     += other.LHS;
-      RHS     += other.RHS;
-      error   += other.error;
-      num_obs += other.num_obs;
+      LHS         += other.LHS;
+      RHS         += other.RHS;
+      hessian     += other.hessian;
+      error       += other.error;
+      num_obs     += other.num_obs;
     }
 
   private:
@@ -354,6 +358,7 @@ class PoseRefine
   public:
     Eigen::Matrix6d LHS;
     Eigen::Vector6d RHS;
+    Eigen::Matrix6d hessian;
     double          error;
     unsigned int    num_obs;
 
@@ -434,7 +439,8 @@ class DTrack
 
     ///////////////////////////////////////////////////////////////////////////
     double Estimate(const cv::Mat&            live_grey,  // Input: Live image.
-                    Sophus::SE3Group<double>& Trl         // Input/Output: Transform between grey cameras (input is hint).
+                    Sophus::SE3Group<double>& Trl,        // Input/Output: Transform between grey cameras (input is hint).
+                    Eigen::Matrix6d&          covariance  // Output: Covariance
         )
     {
       // Options.
@@ -448,6 +454,7 @@ class DTrack
       std::vector<unsigned int> vec_max_iterations = {1, 2, 3, 4};
 
       // Aux variables.
+      Eigen::Matrix6d hessian;
       Eigen::Matrix6d LHS;
       Eigen::Vector6d RHS;
 
@@ -480,6 +487,7 @@ class DTrack
 
         for (unsigned int num_iters = 0; num_iters < vec_max_iterations[pyramid_lvl]; ++num_iters) {
           // Reset.
+          hessian.setZero();
           LHS.setZero();
           RHS.setZero();
 
@@ -505,8 +513,8 @@ class DTrack
           tbb::parallel_reduce(tbb::blocked_range<size_t>(0,
               ref_depth_img.cols*ref_depth_img.rows, 10000), pose_ref);
 
-          LHS     = pose_ref.LHS;
-          RHS     = pose_ref.RHS;
+          LHS           = pose_ref.LHS;
+          RHS           = pose_ref.RHS;
           squared_error = pose_ref.error;
           number_observations  = pose_ref.num_obs;
 #else
@@ -648,6 +656,11 @@ class DTrack
           }
 
 #endif
+          // Get covariance.
+          if (pyramid_lvl == 0) {
+            covariance = pose_ref.hessian.inverse();
+          }
+
           // Solution.
           Eigen::Vector6d X;
 

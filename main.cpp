@@ -204,6 +204,7 @@ int main(int argc, char** argv)
 
   ///----- Init BA stuff.
   typedef ba::ImuMeasurementT<double>               ImuMeasurement;
+  std::vector<uint32_t>                             imu_residual_ids;
   ba::InterpolationBufferT<ImuMeasurement, double>  imu_buffer;
   ba::BundleAdjuster<double, 1, 15, 0>              bundle_adjuster;
   ba::Options<double>                               options;
@@ -368,6 +369,7 @@ int main(int argc, char** argv)
   Sophus::SE3d gt_pose;
   Sophus::SE3d current_pose;
   Sophus::SE3d pose_estimate;
+  Eigen::Matrix6d pose_covariance;
   std::shared_ptr<pb::ImageArray> images = pb::ImageArray::Create();
 
 
@@ -465,7 +467,8 @@ int main(int argc, char** argv)
 
         // RGBD pose estimation.
         dtrack.SetKeyframe(keyframe_image, keyframe_depth);
-        double dtrack_error = dtrack.Estimate(current_image, pose_estimate);
+        double dtrack_error = dtrack.Estimate(current_image, pose_estimate,
+                                              pose_covariance);
         analytics["DTrack RMS"] = dtrack_error;
 
         // Calculate pose error.
@@ -487,8 +490,10 @@ int main(int argc, char** argv)
         double timestamp = image_timestamps[frame_index];
         bundle_adjuster.AddPose(current_pose, true, timestamp);
         bundle_adjuster.AddBinaryConstraint(frame_index-1, frame_index,
-                                            pose_estimate);
-        bundle_adjuster.AddImuResidual(frame_index-1, frame_index, imu_measurements);
+                                            pose_estimate, pose_covariance);
+        imu_residual_ids.push_back(
+              bundle_adjuster.AddImuResidual(frame_index-1, frame_index,
+                                             imu_measurements));
 
 
         // Update error.
@@ -539,6 +544,38 @@ int main(int argc, char** argv)
 
     gl_path_orig.SetVisible(ui_show_orig_path);
     gl_path_ba.SetVisible(ui_show_ba_path);
+
+    {
+      view_3d.ActivateAndScissor(stacks3d);
+      const ba::ImuCalibrationT<double>& imu = bundle_adjuster.GetImuCalibration();
+      std::vector<ba::ImuPoseT<double>> imu_poses;
+
+      for (uint32_t id : imu_residual_ids) {
+        const ba::ImuResidualT<double>& res = bundle_adjuster.GetImuResidual(id);
+        const ba::PoseT<double>& pose = bundle_adjuster.GetPose(res.pose1_id);
+        std::vector<ba::ImuMeasurementT<double> > meas =
+            imu_buffer.GetRange(res.measurements.front().time,
+                                res.measurements.back().time);
+        res.IntegrateResidual(pose, meas, pose.b.head<3>(), pose.b.tail<3>(),
+                              imu.g_vec, imu_poses);
+        if (pose.is_active) {
+          glColor3f(1.0, 0.0, 1.0);
+        } else {
+          glColor3f(1.0, 0.2, 0.5);
+        }
+
+        for (size_t ii = 1 ; ii < imu_poses.size() ; ++ii) {
+          ba::ImuPoseT<double>& prev_imu_pose = imu_poses[ii - 1];
+          ba::ImuPoseT<double>& imu_pose = imu_poses[ii];
+          pangolin::glDrawLine(prev_imu_pose.t_wp.translation()[0],
+              prev_imu_pose.t_wp.translation()[1],
+              prev_imu_pose.t_wp.translation()[2],
+              imu_pose.t_wp.translation()[0],
+              imu_pose.t_wp.translation()[1],
+              imu_pose.t_wp.translation()[2]);
+        }
+      }
+    }
 
     // Sleep a bit.
     usleep(1e6/60.0);
