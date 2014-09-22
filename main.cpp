@@ -62,6 +62,14 @@ inline cv::Mat ConvertAndNormalize(const cv::Mat& in)
 }
 
 
+/////////////////////////////////////////////////////////////////////////////
+struct Pose {
+  Sophus::SE3d      Twp;
+  Eigen::Matrix6d   covariance;
+  double            time;
+};
+
+
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
@@ -96,7 +104,6 @@ int main(int argc, char** argv)
   pangolin::Var<bool>  ui_use_gt_poses("ui.Use GT Poses", false, true);
   pangolin::Var<bool>  ui_use_constant_velocity("ui.Use Const Vel Model", false, true);
   pangolin::Var<bool>  ui_use_imu_estimates("ui.Use IMU Estimates", false, true);
-  pangolin::Var<bool>  ui_update_ba_poses("ui.Update BA Poses", true, false);
   pangolin::Var<bool>  ui_show_orig_path("ui.Show Original Path", true, true);
   pangolin::Var<bool>  ui_show_ba_path("ui.Show BA Path", true, true);
 
@@ -174,6 +181,7 @@ int main(int argc, char** argv)
   bool capture_flag;
   bool paused = true;
   bool step_once = false;
+  bool run_ba = true;
 
 
   ///----- Load camera model.
@@ -208,13 +216,6 @@ int main(int argc, char** argv)
   ba::InterpolationBufferT<ImuMeasurement, double>  imu_buffer;
   ba::BundleAdjuster<double, 1, 15, 0>              bundle_adjuster;
   ba::Options<double>                               options;
-  options.regularize_biases_in_batch = false;
-  options.error_change_threshold = 1e-3;
-  bundle_adjuster.Init(options);
-  bundle_adjuster.AddCamera(rig.cameras_[0], rig.t_wc_[0]);
-  Eigen::Matrix<double, 3, 1> gravity;
-  gravity << 0, 9.8, 0;
-  bundle_adjuster.SetGravity(gravity);
 
   ///----- Load file of ground truth poses (required).
   std::vector<Sophus::SE3d> poses;
@@ -357,11 +358,11 @@ int main(int argc, char** argv)
                                      [&ui_reset] {
                                         ui_reset = true; });
   pangolin::RegisterKeyPressCallback('o',
-                                     [&bundle_adjuster, &ui_update_ba_poses] {
-                                      bundle_adjuster.Solve(25, 0.2);
-                                      ui_update_ba_poses = true; });
+                                     [&run_ba] {
+                                        run_ba = !run_ba; });
 
   ///----- Init general variables.
+  std::vector<Pose> dtrack_map;
   unsigned int frame_index = 0;
   Sophus::SE3d gt_pose;
   Sophus::SE3d current_pose;
@@ -385,7 +386,7 @@ int main(int argc, char** argv)
       timer_view.InitReset();
       analytics_view.InitReset();
 
-      // Reset path.
+      // Reset GUI path.
       path_orig_vec.clear();
       path_ba_vec.clear();
 
@@ -397,8 +398,10 @@ int main(int argc, char** argv)
       // Reset frame counter.
       frame_index = 0;
 
-      // Reset pose.
+      // Reset map and current pose.
+      dtrack_map.clear();
       current_pose = Sophus::SE3d();
+      path_orig_vec.push_back(current_pose);
 
       // Capture first image.
       capture_flag = camera.Capture(*images);
@@ -407,10 +410,6 @@ int main(int argc, char** argv)
       // Reset reference image for DTrack.
       keyframe_image = current_image;
       keyframe_depth = images->at(1)->Mat();
-
-      // Add initial pose for BA.
-      double timestamp = image_timestamps[frame_index];
-      bundle_adjuster.AddPose(current_pose, true, timestamp);
 
       // Increment frame counter.
       frame_index++;
@@ -457,7 +456,7 @@ int main(int argc, char** argv)
           ba::ImuPoseT<double> new_pose =
               decltype(bundle_adjuster)::ImuResidual::IntegrateResidual(last_pose,
               imu_measurements, last_pose.b.head<3>(), last_pose.b.tail<3>(),
-              gravity, imu_poses);
+              bundle_adjuster.GetImuCalibration().g_vec, imu_poses);
 
           pose_estimate = new_pose.t_wp;
         }
@@ -466,6 +465,11 @@ int main(int argc, char** argv)
         dtrack.SetKeyframe(keyframe_image, keyframe_depth);
         double dtrack_error = dtrack.Estimate(current_image, pose_estimate,
                                               pose_covariance);
+        Pose pose;
+        pose.Twp        = pose_estimate;
+        pose.covariance = pose_covariance;
+        pose.time       = image_timestamps[frame_index];
+        dtrack_map.push_back(pose);
         analytics["DTrack RMS"] = dtrack_error;
 
         // Calculate pose error.
@@ -483,16 +487,8 @@ int main(int argc, char** argv)
         current_pose = current_pose * pose_estimate;
         path_orig_vec.push_back(pose_estimate);
 
-        // Push new pose to BA.
-        double timestamp = image_timestamps[frame_index];
-        bundle_adjuster.AddPose(current_pose, true, timestamp);
-        bundle_adjuster.AddBinaryConstraint(frame_index-1, frame_index,
-                                            pose_estimate, pose_covariance);
-        imu_residual_ids.push_back(
-              bundle_adjuster.AddImuResidual(frame_index-1, frame_index,
-                                             imu_measurements));
 
-
+        ///----- Update GUI objects.
         // Update error.
         analytics["Path Error"] =
             Sophus::SE3::log(current_pose.inverse() * gt_pose).head(3).norm();
@@ -509,18 +505,60 @@ int main(int argc, char** argv)
       }
     }
 
-    ///----- Draw BA poses ...
-    if (pangolin::Pushed(ui_update_ba_poses)) {
 
+    ///----- Run BA ...
+    if (pangolin::Pushed(run_ba)) {
+
+      // Init BA.
+      options.regularize_biases_in_batch  = false;
+      options.error_change_threshold      = 1e-3;
+      bundle_adjuster.Init(options);
+      bundle_adjuster.AddCamera(rig.cameras_[0], rig.t_wc_[0]);
+      Eigen::Matrix<double, 3, 1> gravity;
+      gravity << 0, 9.8, 0;
+      bundle_adjuster.SetGravity(gravity);
+
+      // Reset IMU residuals IDs.
+      imu_residual_ids.clear();
+
+      // Push initial pose.
+      Sophus::SE3d global_pose; // Identity.
+      bundle_adjuster.AddPose(global_pose, true, 0);
+
+      // Push DTrack estimates.
+      double previous_time = 0;
+      for (size_t ii = 0; ii < dtrack_map.size(); ++ii) {
+        Pose& pose = dtrack_map[ii];
+        global_pose *= pose.Twp;
+        bundle_adjuster.AddPose(global_pose, true, pose.time);
+
+        // Add DTrack constraints.
+        bundle_adjuster.AddBinaryConstraint(ii, ii+1,
+                                            pose.Twp, pose.covariance);
+
+        // Get IMU measurements between frames.
+        std::vector<ImuMeasurement> imu_measurements =
+            imu_buffer.GetRange(previous_time, pose.time);
+
+        // Add IMU constraints.
+        imu_residual_ids.push_back(
+              bundle_adjuster.AddImuResidual(ii, ii+1, imu_measurements));
+
+        // Update time.
+        previous_time = pose.time;
+      }
+
+      // Run solver.
+      bundle_adjuster.Solve(25, 0.2);
+
+      ///----- Update GUI objects.
       path_ba_vec.clear();
-
-      for (size_t ii = 0; ii < frame_index-1; ++ii) {
+      for (size_t ii = 0; ii < frame_index; ++ii) {
         ba::PoseT<double> pose = bundle_adjuster.GetPose(ii);
         path_ba_vec.push_back(pose.t_wp);
       }
-
-
     }
+
 
 
     /////////////////////////////////////////////////////////////////////////////
@@ -542,6 +580,8 @@ int main(int argc, char** argv)
     gl_path_orig.SetVisible(ui_show_orig_path);
     gl_path_ba.SetVisible(ui_show_ba_path);
 
+
+    // Update path using NIMA's code.
     {
       view_3d.ActivateAndScissor(stacks3d);
       const ba::ImuCalibrationT<double>& imu = bundle_adjuster.GetImuCalibration();

@@ -31,7 +31,7 @@
 #include <calibu/cam/CameraRig.h>
 
 /////////////////////////////////////////////////////////////////////////////
-namespace Eigen{
+namespace Eigen {
 #define USING_VECTOR_ARRAY(size)                            \
   using Vector##size##tArray =                              \
   std::vector<Matrix<double, size, 1>,                      \
