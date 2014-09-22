@@ -458,7 +458,11 @@ int main(int argc, char** argv)
               imu_measurements, last_pose.b.head<3>(), last_pose.b.tail<3>(),
               bundle_adjuster.GetImuCalibration().g_vec, imu_poses);
 
-          pose_estimate = new_pose.t_wp;
+          // Get new relative transform to seed ESM.
+          pose_estimate = last_pose.t_wp.inverse() * new_pose.t_wp;
+
+          // Make sure BA is ran at the end.
+          run_ba = true;
         }
 
         // RGBD pose estimation.
