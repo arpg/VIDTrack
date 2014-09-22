@@ -208,13 +208,10 @@ int main(int argc, char** argv)
   ba::InterpolationBufferT<ImuMeasurement, double>  imu_buffer;
   ba::BundleAdjuster<double, 1, 15, 0>              bundle_adjuster;
   ba::Options<double>                               options;
-  options.trust_region_size = 100000;
+  options.regularize_biases_in_batch = false;
+  options.error_change_threshold = 1e-3;
   bundle_adjuster.Init(options);
-  Eigen::Matrix4d eTic = SceneGraph::GLCart2T(0, 0, 0, M_PI/2.0, -M_PI/2.0, 0);
-//  Eigen::Matrix4d eTic = SceneGraph::GLCart2T(0, 0, 0, M_PI/2.0, M_PI/2.0, 0);
-  Sophus::SE3d Tic(eTic);
-  bundle_adjuster.AddCamera(rig.cameras_[0], Tic);
-//  bundle_adjuster.AddCamera(rig.cameras_[0], rig.t_wc_[0]);
+  bundle_adjuster.AddCamera(rig.cameras_[0], rig.t_wc_[0]);
   Eigen::Matrix<double, 3, 1> gravity;
   gravity << 0, 9.8, 0;
   bundle_adjuster.SetGravity(gravity);
