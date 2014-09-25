@@ -64,7 +64,7 @@ inline cv::Mat ConvertAndNormalize(const cv::Mat& in)
 
 /////////////////////////////////////////////////////////////////////////////
 struct Pose {
-  Sophus::SE3d      Twp;
+  Sophus::SE3d      Trl;
   Eigen::Matrix6d   covariance;
   double            time;
 };
@@ -99,7 +99,7 @@ int main(int argc, char** argv)
   // Set up panel.
   const unsigned int panel_size = 180;
   pangolin::CreatePanel("ui").SetBounds(0, 1, 0, pangolin::Attach::Pix(panel_size));
-  pangolin::Var<bool>  ui_camera_follow("ui.Camera Follow", true, true);
+  pangolin::Var<bool>  ui_camera_follow("ui.Camera Follow", false, true);
   pangolin::Var<bool>  ui_reset("ui.Reset", true, false);
   pangolin::Var<bool>  ui_use_gt_poses("ui.Use GT Poses", false, true);
   pangolin::Var<bool>  ui_use_constant_velocity("ui.Use Const Vel Model", false, true);
@@ -178,10 +178,10 @@ int main(int argc, char** argv)
   container.AddDisplay(view_3d);
 
   // GUI aux variables.
-  bool capture_flag;
-  bool paused = true;
-  bool step_once = false;
-  bool run_ba = true;
+  bool capture_flag = false;
+  bool paused       = true;
+  bool step_once    = false;
+  bool run_ba       = false;
 
 
   ///----- Load camera model.
@@ -234,6 +234,9 @@ int main(int argc, char** argv)
     if (cl_args.search("-V")) {
       // Vision convention.
       std::cout << "- NOTE: File is being read in VISION frame." << std::endl;
+    } else if (cl_args.search("-C")) {
+      // Custom convention.
+      std::cout << "- NOTE: File is being read in *****CUSTOM***** frame." << std::endl;
     } else if (cl_args.search("-T")) {
       // Tsukuba convention.
       std::cout << "- NOTE: File is being read in TSUKUBA frame." << std::endl;
@@ -256,6 +259,11 @@ int main(int argc, char** argv)
       if (cl_args.search("-V")) {
         // Vision convention.
         poses.push_back(T);
+      } else if (cl_args.search("-C")) {
+        // Custom setting.
+        Sophus::SE3d Tt(SceneGraph::GLCart2T(0, 0, 0, 0, -M_PI/2.0, -M_PI/2.0));
+        poses.push_back(calibu::ToCoordinateConvention(T,
+                                                       calibu::RdfRobotics.inverse())*Tt);
       } else if (cl_args.search("-T")) {
         // Tsukuba convention.
         Eigen::Matrix3d tsukuba_convention;
@@ -470,9 +478,10 @@ int main(int argc, char** argv)
         double dtrack_error = dtrack.Estimate(current_image, pose_estimate,
                                               pose_covariance);
         Pose pose;
-        pose.Twp        = pose_estimate;
+        pose.Trl        = pose_estimate;
         pose.covariance = pose_covariance;
         pose.time       = image_timestamps[frame_index];
+        std::cout << "Timestamp: " << pose.time << std::endl;
         dtrack_map.push_back(pose);
         analytics["DTrack RMS"] = dtrack_error;
 
@@ -515,8 +524,7 @@ int main(int argc, char** argv)
 
       // Init BA.
       options.regularize_biases_in_batch  = false;
-      options.error_change_threshold      = 1e-3;
-      bundle_adjuster.Init(options);
+      bundle_adjuster.Init(options, 200, 2000);
       bundle_adjuster.AddCamera(rig.cameras_[0], rig.t_wc_[0]);
       Eigen::Matrix<double, 3, 1> gravity;
       gravity << 0, 9.8, 0;
@@ -528,18 +536,30 @@ int main(int argc, char** argv)
       // Push initial pose.
       Sophus::SE3d global_pose; // Identity.
       bundle_adjuster.AddPose(global_pose, true, 0);
+      {
+        Eigen::Matrix6d cov;
+        cov.setIdentity();
+        cov *= 1e-6;
+        bundle_adjuster.AddUnaryConstraint(0, global_pose, cov);
+      }
 
       // Push DTrack estimates.
       double previous_time = 0;
       for (size_t ii = 0; ii < dtrack_map.size(); ++ii) {
         Pose& pose = dtrack_map[ii];
-        global_pose *= pose.Twp;
+        global_pose *= pose.Trl;
         bundle_adjuster.AddPose(global_pose, true, pose.time);
 
         // Add DTrack constraints.
-        bundle_adjuster.AddBinaryConstraint(ii, ii+1,
-                                            pose.Twp, pose.covariance);
+//        bundle_adjuster.AddBinaryConstraint(ii, ii+1, pose.Twp, pose.covariance);
 
+        Eigen::Matrix6d cov;
+        cov.setIdentity();
+        cov *= 1e-6;
+        gt_pose = poses[0].inverse() * poses[ii+1];
+        bundle_adjuster.AddUnaryConstraint(ii+1, gt_pose, cov);
+
+#if 1
         // Get IMU measurements between frames.
         std::vector<ImuMeasurement> imu_measurements =
             imu_buffer.GetRange(previous_time, pose.time);
@@ -550,6 +570,7 @@ int main(int argc, char** argv)
 
         // Update time.
         previous_time = pose.time;
+#endif
       }
 
       // Run solver.
