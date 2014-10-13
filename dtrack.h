@@ -517,6 +517,11 @@ class DTrack
           RHS           = pose_ref.RHS;
           squared_error = pose_ref.error;
           number_observations  = pose_ref.num_obs;
+
+          // Get covariance.
+          if (pyramid_lvl == 0) {
+            covariance = pose_ref.hessian.inverse();
+          }
 #else
           // Iterate through depth map.
           for (int row = 0; row < ref_depth_img.rows; ++row) {
@@ -652,15 +657,13 @@ class DTrack
               squared_error += y*y;
               number_observations++;
 
+              // Covariance not provided without TBB (yet).
+              covariance.setIdentity();
+
             }
           }
 
 #endif
-          // Get covariance.
-          if (pyramid_lvl == 0) {
-            covariance = pose_ref.hessian.inverse();
-          }
-
           // Solution.
           Eigen::Vector6d X;
 

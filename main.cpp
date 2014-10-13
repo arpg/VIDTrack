@@ -477,11 +477,11 @@ int main(int argc, char** argv)
         dtrack.SetKeyframe(keyframe_image, keyframe_depth);
         double dtrack_error = dtrack.Estimate(current_image, pose_estimate,
                                               pose_covariance);
+        std::cout << "Pose Estimate: " << SceneGraph::GLT2Cart(pose_estimate.matrix()).transpose() << std::endl;
         Pose pose;
         pose.Trl        = pose_estimate;
         pose.covariance = pose_covariance;
         pose.time       = image_timestamps[frame_index];
-        std::cout << "Timestamp: " << pose.time << std::endl;
         dtrack_map.push_back(pose);
         analytics["DTrack RMS"] = dtrack_error;
 
