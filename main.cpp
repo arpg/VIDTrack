@@ -9,6 +9,7 @@
 #include <HAL/Utils/TicToc.h>
 #include <HAL/Camera/CameraDevice.h>
 #include <pangolin/pangolin.h>
+#include <pangolin/glglut.h>
 #include <SceneGraph/SceneGraph.h>
 #include <calibu/Calibu.h>
 #include <calibu/calib/LocalParamSe3.h>
