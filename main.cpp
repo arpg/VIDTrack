@@ -9,7 +9,6 @@
 #include <HAL/Utils/TicToc.h>
 #include <HAL/Camera/CameraDevice.h>
 #include <pangolin/pangolin.h>
-#include <pangolin/glglut.h>
 #include <SceneGraph/SceneGraph.h>
 #include <calibu/Calibu.h>
 #include <calibu/calib/LocalParamSe3.h>
@@ -105,8 +104,9 @@ int main(int argc, char** argv)
   pangolin::Var<bool>  ui_use_gt_poses("ui.Use GT Poses", false, true);
   pangolin::Var<bool>  ui_use_constant_velocity("ui.Use Const Vel Model", false, true);
   pangolin::Var<bool>  ui_use_imu_estimates("ui.Use IMU Estimates", false, true);
-  pangolin::Var<bool>  ui_show_orig_path("ui.Show Original Path", true, true);
+  pangolin::Var<bool>  ui_show_vo_path("ui.Show VO Path", true, true);
   pangolin::Var<bool>  ui_show_ba_path("ui.Show BA Path", true, true);
+  pangolin::Var<bool>  ui_show_gt_path("ui.Show GT Path", true, true);
 
   // Set up container.
   pangolin::View& container = pangolin::CreateDisplay();
@@ -136,24 +136,31 @@ int main(int argc, char** argv)
   glClearColor(0, 0, 0, 1);
 
   // Add path.
-  GLPathRel gl_path_orig;
+  GLPathRel gl_path_vo;
   GLPathAbs gl_path_ba;
-  gl_path_orig.SetPoseDisplay(5);
+  GLPathAbs gl_path_gt;
+  gl_path_vo.SetPoseDisplay(5);
   gl_path_ba.SetPoseDisplay(5);
+  gl_path_gt.SetPoseDisplay(5);
   gl_path_ba.SetLineColor(0, 1.0, 0);
-  gl_graph.AddChild(&gl_path_orig);
+  gl_path_gt.SetLineColor(0, 0, 1.0);
+  gl_graph.AddChild(&gl_path_vo);
   gl_graph.AddChild(&gl_path_ba);
-  std::vector<Sophus::SE3d>& path_orig_vec = gl_path_orig.GetPathRef();
+  gl_graph.AddChild(&gl_path_gt);
+  std::vector<Sophus::SE3d>& path_vo_vec = gl_path_vo.GetPathRef();
   std::vector<Sophus::SE3d>& path_ba_vec = gl_path_ba.GetPathRef();
+  std::vector<Sophus::SE3d>& path_gt_vec = gl_path_gt.GetPathRef();
 
   // Add grid.
   SceneGraph::GLGrid gl_grid(50, 1);
+#if 0
   {
     Sophus::SE3d vision_RDF;
     Sophus::SO3d& rotation = vision_RDF.so3();
     rotation = calibu::RdfRobotics.inverse();
     gl_grid.SetPose(vision_RDF.matrix());
   }
+#endif
   gl_graph.AddChild(&gl_grid);
 
   pangolin::View view_3d;
@@ -162,7 +169,7 @@ int main(int argc, char** argv)
 
   pangolin::OpenGlRenderState stacks3d(
         pangolin::ProjectionMatrix(640, 480, 420, 420, 320, 240, near, far),
-        pangolin::ModelViewLookAt(0, -8, -5, 0, 0, 0, pangolin::AxisNegY)
+        pangolin::ModelViewLookAt(-5, 0, -8, 0, 0, 0, pangolin::AxisNegZ)
         );
 
   view_3d.SetHandler(new SceneGraph::HandlerSceneGraph(gl_graph, stacks3d))
@@ -255,6 +262,8 @@ int main(int argc, char** argv)
       pose(5) = r;
 
       Sophus::SE3d T(SceneGraph::GLCart2T(pose));
+
+      path_gt_vec.push_back(T);
 
       // Flag to load poses as a particular convention.
       if (cl_args.search("-V")) {
@@ -360,7 +369,7 @@ int main(int argc, char** argv)
   }
 
   pangolin::RegisterKeyPressCallback(' ', [&paused] { paused = !paused; });
-  pangolin::RegisterKeyPressCallback(pangolin::PANGO_SPECIAL + GLUT_KEY_RIGHT,
+  pangolin::RegisterKeyPressCallback(pangolin::PANGO_SPECIAL + pangolin::PANGO_KEY_RIGHT,
                                      [&step_once] {
                                         step_once = !step_once; });
   pangolin::RegisterKeyPressCallback(pangolin::PANGO_CTRL + 'r',
@@ -396,7 +405,7 @@ int main(int argc, char** argv)
       analytics_view.InitReset();
 
       // Reset GUI path.
-      path_orig_vec.clear();
+      path_vo_vec.clear();
       path_ba_vec.clear();
 
       // Re-initialize camera.
@@ -410,7 +419,7 @@ int main(int argc, char** argv)
       // Reset map and current pose.
       dtrack_map.clear();
       current_pose = Sophus::SE3d();
-      path_orig_vec.push_back(current_pose);
+      path_vo_vec.push_back(current_pose);
 
       // Capture first image.
       capture_flag = camera.Capture(*images);
@@ -444,13 +453,13 @@ int main(int argc, char** argv)
           pose_estimate = Sophus::SE3d();
         }
 
-        // Get IMU measurements between previous frame and current frame.
-        std::vector<ImuMeasurement> imu_measurements =
-            imu_buffer.GetRange(image_timestamps[frame_index-1],
-            image_timestamps[frame_index]);
-
         // Integrate IMU to get an initial pose estimate to seed VO.
         if (ui_use_imu_estimates) {
+
+          // Get IMU measurements between previous frame and current frame.
+          std::vector<ImuMeasurement> imu_measurements =
+              imu_buffer.GetRange(image_timestamps[frame_index-1],
+              image_timestamps[frame_index]);
 
           if (imu_measurements.size() == 0) {
             std::cerr << "Could not find imu measurements between : " <<
@@ -499,7 +508,7 @@ int main(int argc, char** argv)
         // Update pose.
         gt_pose = gt_pose * gt_relative_pose;
         current_pose = current_pose * pose_estimate;
-        path_orig_vec.push_back(pose_estimate);
+        path_vo_vec.push_back(pose_estimate);
 
 
         ///----- Update GUI objects.
@@ -523,6 +532,7 @@ int main(int argc, char** argv)
     ///----- Run BA ...
     if (pangolin::Pushed(run_ba)) {
 
+#if 0
       // Init BA.
       options.regularize_biases_in_batch  = false;
       bundle_adjuster.Init(options, 200, 2000);
@@ -560,7 +570,6 @@ int main(int argc, char** argv)
         gt_pose = poses[0].inverse() * poses[ii+1];
         bundle_adjuster.AddUnaryConstraint(ii+1, gt_pose, cov);
 
-#if 1
         // Get IMU measurements between frames.
         std::vector<ImuMeasurement> imu_measurements =
             imu_buffer.GetRange(previous_time, pose.time);
@@ -572,14 +581,57 @@ int main(int argc, char** argv)
         // Update time.
         previous_time = pose.time;
 #endif
+
+#if 1
+        // Init BA.
+        options.regularize_biases_in_batch  = false;
+        bundle_adjuster.Init(options, 200, 2000);
+        bundle_adjuster.AddCamera(rig.cameras_[0], rig.t_wc_[0]);
+        Eigen::Matrix<double, 3, 1> gravity;
+        gravity << 0, 9.8, 0;
+        bundle_adjuster.SetGravity(gravity);
+
+        // Reset IMU residuals IDs.
+        imu_residual_ids.clear();
+
+        // Push first pose.
+        bundle_adjuster.AddPose(poses[0], true, image_timestamps[0]);
+        {
+          Eigen::Matrix6d cov;
+          cov.setIdentity();
+          cov *= 1e-6;
+          bundle_adjuster.AddUnaryConstraint(0, poses[0], cov);
+        }
+
+        // Push rest of poses.
+        double previous_time = image_timestamps[0];
+        for (size_t ii = 1; ii < dtrack_map.size(); ++ii) {
+          bundle_adjuster.AddPose(poses[ii], true, image_timestamps[ii]);
+
+          Eigen::Matrix6d cov;
+          cov.setIdentity();
+          cov *= 1e-6;
+          bundle_adjuster.AddUnaryConstraint(ii, poses[ii], cov);
+
+          // Get IMU measurements between frames.
+          std::vector<ImuMeasurement> imu_measurements =
+              imu_buffer.GetRange(previous_time, image_timestamps[ii]);
+
+          // Add IMU constraints.
+          imu_residual_ids.push_back(
+                bundle_adjuster.AddImuResidual(ii-1, ii, imu_measurements));
+
+          // Update time.
+          previous_time = image_timestamps[ii];
+#endif
       }
 
       // Run solver.
-      bundle_adjuster.Solve(25, 0.2);
+      bundle_adjuster.Solve(25, 1.0);
 
       ///----- Update GUI objects.
       path_ba_vec.clear();
-      for (size_t ii = 0; ii < frame_index; ++ii) {
+      for (size_t ii = 0; ii < frame_index-1; ++ii) {
         ba::PoseT<double> pose = bundle_adjuster.GetPose(ii);
         path_ba_vec.push_back(pose.t_wp);
       }
@@ -603,8 +655,9 @@ int main(int argc, char** argv)
       stacks3d.Follow(current_pose.matrix());
     }
 
-    gl_path_orig.SetVisible(ui_show_orig_path);
+    gl_path_vo.SetVisible(ui_show_vo_path);
     gl_path_ba.SetVisible(ui_show_ba_path);
+    gl_path_gt.SetVisible(ui_show_gt_path);
 
 
     // Update path using NIMA's code.
