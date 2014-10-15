@@ -222,7 +222,7 @@ int main(int argc, char** argv)
   typedef ba::ImuMeasurementT<double>               ImuMeasurement;
   std::vector<uint32_t>                             imu_residual_ids;
   ba::InterpolationBufferT<ImuMeasurement, double>  imu_buffer;
-  ba::BundleAdjuster<double, 1, 15, 0>              bundle_adjuster;
+  ba::BundleAdjuster<double, 0, 9, 0>               bundle_adjuster;
   ba::Options<double>                               options;
 
   ///----- Load file of ground truth poses (required).
@@ -315,6 +315,8 @@ int main(int argc, char** argv)
 
       ImuMeasurement imu(w, a, timestamp);
       imu_buffer.AddElement(imu);
+      //std::cerr << "Added accel: " << a.transpose() << " and gyro " <<
+      //             w.transpose() << " at time " << timestamp << std::endl;
       imu_count++;
     }
     std::cout << "- NOTE: " << imu_count << " IMU measurements loaded." << std::endl;
@@ -584,50 +586,62 @@ int main(int argc, char** argv)
 
 #if 1
         // Init BA.
-        options.regularize_biases_in_batch  = false;
+        options.regularize_biases_in_batch  = true;
+        options.use_triangular_matrices = false;
+        options.use_sparse_solver = false;
+        options.use_dogleg = true;
+        //ba::debug_level_threshold = 1;
         bundle_adjuster.Init(options, 200, 2000);
         bundle_adjuster.AddCamera(rig.cameras_[0], rig.t_wc_[0]);
         Eigen::Matrix<double, 3, 1> gravity;
-        gravity << 0, 9.8, 0;
+
+        gravity << 0, 0, -9.806;
         bundle_adjuster.SetGravity(gravity);
 
         // Reset IMU residuals IDs.
         imu_residual_ids.clear();
 
         // Push first pose.
-        bundle_adjuster.AddPose(poses[0], true, image_timestamps[0]);
+        Eigen::Matrix4d noise = SceneGraph::GLCart2T(0.1, -0.1, -0.2,
+                                                     0.200, 0.300, 0.1000);
+        Sophus::SE3d noisy_pose(poses[0].matrix() + noise);
+        bundle_adjuster.AddPose(noisy_pose, true, image_timestamps[0]);
+        //std::cerr << "Adding pose at time " << image_timestamps[0] << std::endl;
+//        bundle_adjuster.AddPose(poses[0], true, image_timestamps[0]);
         {
           Eigen::Matrix6d cov;
           cov.setIdentity();
           cov *= 1e-6;
-          bundle_adjuster.AddUnaryConstraint(0, poses[0], cov);
+          //bundle_adjuster.AddUnaryConstraint(0, poses[0], cov);
         }
 
         // Push rest of poses.
-        double previous_time = image_timestamps[0];
         for (size_t ii = 1; ii < dtrack_map.size(); ++ii) {
-          bundle_adjuster.AddPose(poses[ii], true, image_timestamps[ii]);
+          noisy_pose = Sophus::SE3d (poses[ii].matrix() + noise);
+          bundle_adjuster.AddPose(noisy_pose, true, image_timestamps[ii]);
+          //std::cerr << "Adding pose at time " << image_timestamps[ii] << std::endl;
+//          bundle_adjuster.AddPose(poses[ii], true, image_timestamps[ii]);
 
           Eigen::Matrix6d cov;
           cov.setIdentity();
           cov *= 1e-6;
-          bundle_adjuster.AddUnaryConstraint(ii, poses[ii], cov);
+          //bundle_adjuster.AddUnaryConstraint(ii, poses[ii], cov);
+          bundle_adjuster.AddBinaryConstraint(
+                ii - 1, ii, poses[ii - 1].inverse() * poses[ii], cov);
 
           // Get IMU measurements between frames.
           std::vector<ImuMeasurement> imu_measurements =
-              imu_buffer.GetRange(previous_time, image_timestamps[ii]);
+              imu_buffer.GetRange(image_timestamps[ii - 1],
+              image_timestamps[ii]);
 
           // Add IMU constraints.
           imu_residual_ids.push_back(
                 bundle_adjuster.AddImuResidual(ii-1, ii, imu_measurements));
-
-          // Update time.
-          previous_time = image_timestamps[ii];
 #endif
       }
 
       // Run solver.
-      bundle_adjuster.Solve(25, 1.0);
+      bundle_adjuster.Solve(1000, 1.0);
 
       ///----- Update GUI objects.
       path_ba_vec.clear();
@@ -667,7 +681,7 @@ int main(int argc, char** argv)
       std::vector<ba::ImuPoseT<double>> imu_poses;
 
       for (uint32_t id : imu_residual_ids) {
-        const ba::ImuResidualT<double>& res = bundle_adjuster.GetImuResidual(id);
+        const auto& res = bundle_adjuster.GetImuResidual(id);
         const ba::PoseT<double>& pose = bundle_adjuster.GetPose(res.pose1_id);
         std::vector<ba::ImuMeasurementT<double> > meas =
             imu_buffer.GetRange(res.measurements.front().time,
