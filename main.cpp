@@ -105,6 +105,7 @@ int main(int argc, char** argv)
   pangolin::Var<bool>  ui_use_gt_poses("ui.Use GT Poses", false, true);
   pangolin::Var<bool>  ui_use_constant_velocity("ui.Use Const Vel Model", false, true);
   pangolin::Var<bool>  ui_use_imu_estimates("ui.Use IMU Estimates", false, true);
+  pangolin::Var<bool>  ui_use_pyramid("ui.Use Pyramid", true, true);
   pangolin::Var<bool>  ui_show_vo_path("ui.Show VO Path", true, true);
   pangolin::Var<bool>  ui_show_ba_path("ui.Show BA Path", true, true);
   pangolin::Var<bool>  ui_show_gt_path("ui.Show GT Path", true, true);
@@ -381,11 +382,14 @@ int main(int argc, char** argv)
                                         run_ba = !run_ba; });
 
   ///----- Init general variables.
-  std::vector<Pose> dtrack_map;
-  unsigned int frame_index = 0;
-  Sophus::SE3d current_pose;
-  Sophus::SE3d pose_estimate;
-  Eigen::Matrix6d pose_covariance;
+  std::vector<Pose>     dtrack_map;
+  unsigned int          frame_index;
+  Sophus::SE3d          current_pose;
+  Sophus::SE3d          pose_estimate;
+  Eigen::Matrix6d       pose_covariance;
+  bool                  ba_has_run;
+
+  // Image holder.
   std::shared_ptr<pb::ImageArray> images = pb::ImageArray::Create();
 
   // Permutation matrix to bring things into robotic reference frame.
@@ -421,13 +425,14 @@ int main(int argc, char** argv)
       // Reset frame counter.
       frame_index = 0;
 
+      // Reset BA flag.
+      ba_has_run = false;
+
       // Reset map and current pose.
       dtrack_map.clear();
       current_pose = permutation;
-
       path_vo_vec.push_back(current_pose);
       path_gt_vec.push_back(poses[frame_index]);
-
 
       // Capture first image.
       capture_flag = camera.Capture(*images);
@@ -464,38 +469,52 @@ int main(int argc, char** argv)
         // Integrate IMU to get an initial pose estimate to seed VO.
         if (ui_use_imu_estimates) {
 
-          // Get IMU measurements between previous frame and current frame.
-          std::vector<ImuMeasurement> imu_measurements =
-              imu_buffer.GetRange(image_timestamps[frame_index-1],
-              image_timestamps[frame_index]);
+          if (ba_has_run == false) {
+            std::cerr << "- BA has to be run at least once before seeding with \
+                         IMU estimates!" << std::endl;
+          } else {
 
-          if (imu_measurements.size() == 0) {
-            std::cerr << "Could not find imu measurements between : " <<
-                         image_timestamps[frame_index-1] << " and " <<
-                         image_timestamps[frame_index] << std::endl;
-            exit(EXIT_FAILURE);
+            // Get IMU measurements between previous frame and current frame.
+            std::vector<ImuMeasurement> imu_measurements =
+                imu_buffer.GetRange(image_timestamps[frame_index-1],
+                image_timestamps[frame_index]);
+
+            if (imu_measurements.size() == 0) {
+              std::cerr << "Could not find imu measurements between : " <<
+                           image_timestamps[frame_index-1] << " and " <<
+                           image_timestamps[frame_index] << std::endl;
+              exit(EXIT_FAILURE);
+            }
+
+            ba::PoseT<double> last_pose = bundle_adjuster.GetPose(frame_index-1);
+            std::vector<ba::ImuPoseT<double>> imu_poses;
+
+            ba::ImuPoseT<double> new_pose =
+                decltype(bundle_adjuster)::ImuResidual::IntegrateResidual(last_pose,
+                imu_measurements, last_pose.b.head<3>(), last_pose.b.tail<3>(),
+                bundle_adjuster.GetImuCalibration().g_vec, imu_poses);
+
+            // Get new relative transform to seed ESM.
+            pose_estimate = last_pose.t_wp.inverse() * new_pose.t_wp;
+
+            std::cout << "Real Pose Estimate: " <<
+                  Sophus::SE3::log(poses[frame_index-1].inverse() * poses[frame_index]).transpose()
+                          << std::endl;
+
+            std::cout << "Integrated Pose Estimate: " <<
+                         Sophus::SE3::log(pose_estimate).transpose()
+                                 << std::endl;
+
+            // Make sure BA is ran at the end.
+            run_ba = true;
           }
-
-          ba::PoseT<double> last_pose = bundle_adjuster.GetPose(frame_index-1);
-          std::vector<ba::ImuPoseT<double>> imu_poses;
-
-          ba::ImuPoseT<double> new_pose =
-              decltype(bundle_adjuster)::ImuResidual::IntegrateResidual(last_pose,
-              imu_measurements, last_pose.b.head<3>(), last_pose.b.tail<3>(),
-              bundle_adjuster.GetImuCalibration().g_vec, imu_poses);
-
-          // Get new relative transform to seed ESM.
-          pose_estimate = last_pose.t_wp.inverse() * new_pose.t_wp;
-
-          // Make sure BA is ran at the end.
-          run_ba = true;
         }
 
         // RGBD pose estimation.
         dtrack.SetKeyframe(keyframe_image, keyframe_depth);
         double dtrack_error = dtrack.Estimate(current_image, pose_estimate,
-                                              pose_covariance);
-        std::cout << "Pose Estimate: " << Sophus::SE3::log(pose_estimate).transpose() << std::endl;
+                                              pose_covariance, ui_use_pyramid);
+        std::cout << "VO Pose Estimate: " << Sophus::SE3::log(pose_estimate).transpose() << std::endl;
         Pose pose;
         pose.Tab        = pose_estimate;
         pose.covariance = pose_covariance;
@@ -580,6 +599,7 @@ int main(int argc, char** argv)
           global_pose *= pose.Tab;
           cur_id = bundle_adjuster.AddPose(global_pose, true, pose.timeB);
 
+          /*
           std::cout << "GT Rel Pose: " <<
                 Sophus::SE3::log(poses[ii].inverse() * poses[ii+1]).transpose()
                         << std::endl;
@@ -589,6 +609,7 @@ int main(int argc, char** argv)
 
           std::cout << "ERROR Rel Pose: " <<
                 Sophus::SE3::log(pose.Tab.inverse()*poses[ii].inverse()*poses[ii+1]).transpose() << std::endl;
+          */
 
 //          bundle_adjuster.AddBinaryConstraint(prev_id, cur_id, pose.Tab, cov);
           bundle_adjuster.AddBinaryConstraint(prev_id, cur_id, pose.Tab, pose.covariance);
@@ -608,6 +629,9 @@ int main(int argc, char** argv)
 
       // Run solver.
       bundle_adjuster.Solve(1000, 1.0);
+
+      // Reset flag.
+      ba_has_run = true;
 
       ///----- Update GUI objects.
       path_ba_vec.clear();

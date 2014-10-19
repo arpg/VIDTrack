@@ -53,12 +53,13 @@ namespace Eigen {
 }  // namespace Eigen
 
 /////////////////////////////////////////////////////////////////////////////
-inline float interp(float              x,            // Input: X coordinate.
-                    float              y,            // Input: Y coordinate.
-                    const float*       pImage,       // Input: Pointer to image.
-                    const unsigned int uImageWidth,  // Input: Image width.
-                    const unsigned int uImageHeight  // Input: Image height.
-    )
+inline float interp(
+    float              x,            // Input: X coordinate.
+    float              y,            // Input: Y coordinate.
+    const float*       pImage,       // Input: Pointer to image.
+    const unsigned int uImageWidth,  // Input: Image width.
+    const unsigned int uImageHeight  // Input: Image height.
+  )
 {
   if (!((x >= 0) && (y >= 0) && (x <= uImageWidth-2)
         && (y <= uImageHeight-2))) {
@@ -101,19 +102,20 @@ class PoseRefine
 {
   public:
     ///////////////////////////////////////////////////////////////////////////
-    PoseRefine(const cv::Mat&           live_grey,
-               const cv::Mat&           ref_grey,
-               const cv::Mat&           ref_depth,
-               const Eigen::Matrix3d&   Klg,
-               const Eigen::Matrix3d&   Krg,
-               const Eigen::Matrix3d&   Krd,
-               const Eigen::Matrix4d&   Tgd,
-               const Eigen::Matrix4d&   Tlr,
-               const Eigen::Matrix3x4d& KlgTlr,
-               float                    norm_param,
-               bool                     discard_saturated,
-               float                    min_depth,
-               float                    max_depth
+    PoseRefine(
+        const cv::Mat&           live_grey,
+        const cv::Mat&           ref_grey,
+        const cv::Mat&           ref_depth,
+        const Eigen::Matrix3d&   Klg,
+        const Eigen::Matrix3d&   Krg,
+        const Eigen::Matrix3d&   Krd,
+        const Eigen::Matrix4d&   Tgd,
+        const Eigen::Matrix4d&   Tlr,
+        const Eigen::Matrix3x4d& KlgTlr,
+        float                    norm_param,
+        bool                     discard_saturated,
+        float                    min_depth,
+        float                    max_depth
         ):
       error(0),
       num_obs(0),
@@ -137,8 +139,9 @@ class PoseRefine
     }
 
     ///////////////////////////////////////////////////////////////////////////
-    PoseRefine(const PoseRefine& x,
-               tbb::split
+    PoseRefine(
+        const PoseRefine& x,
+        tbb::split
       ):
       error(0),
       num_obs(0),
@@ -411,10 +414,12 @@ class DTrack
     }
 
     ///////////////////////////////////////////////////////////////////////////
-    void SetParams(const calibu::CameraModelGeneric<double>& live_grey_cmod,
-                   const calibu::CameraModelGeneric<double>& ref_grey_cmod,
-                   const calibu::CameraModelGeneric<double>& ref_depth_cmod,
-                   const Sophus::SE3d&                       Tgd)
+    void SetParams(
+        const calibu::CameraModelGeneric<double>& live_grey_cmod,
+        const calibu::CameraModelGeneric<double>& ref_grey_cmod,
+        const calibu::CameraModelGeneric<double>& ref_depth_cmod,
+        const Sophus::SE3d&                       Tgd
+      )
     {
       // Store scaled camera models (to avoid recomputing).
       for (size_t ii = 0; ii < PYRAMID_LEVELS; ++ii) {
@@ -429,8 +434,10 @@ class DTrack
     }
 
     ///////////////////////////////////////////////////////////////////////////
-    void SetKeyframe(const cv::Mat& ref_grey,
-                     const cv::Mat& ref_depth)
+    void SetKeyframe(
+        const cv::Mat& ref_grey,
+        const cv::Mat& ref_depth
+      )
     {
       // Build pyramids.
       cv::buildPyramid(ref_grey, ref_grey_pyramid_, PYRAMID_LEVELS);
@@ -438,10 +445,12 @@ class DTrack
     }
 
     ///////////////////////////////////////////////////////////////////////////
-    double Estimate(const cv::Mat&            live_grey,  // Input: Live image.
-                    Sophus::SE3Group<double>& Trl,        // Input/Output: Transform between grey cameras (input is hint).
-                    Eigen::Matrix6d&          covariance  // Output: Covariance
-        )
+    double Estimate(
+        const cv::Mat&            live_grey,          // Input: Live image.
+        Sophus::SE3Group<double>& Trl,                // Input/Output: Transform between grey cameras (input is hint).
+        Eigen::Matrix6d&          covariance,         // Output: Covariance
+        bool                      use_pyramid = true  // Input: Options.
+      )
     {
       // Options.
       const double norm_c            = 0.04;
@@ -452,6 +461,10 @@ class DTrack
       // Set pyramid max-iterations and full estimate mask.
       std::vector<bool>         vec_full_estimate  = {1, 1, 1, 0};
       std::vector<unsigned int> vec_max_iterations = {1, 2, 3, 4};
+
+      if (use_pyramid == false) {
+        vec_max_iterations = {1, 0, 0, 0};
+      }
 
       // Aux variables.
       Eigen::Matrix6d hessian;
@@ -513,9 +526,9 @@ class DTrack
           tbb::parallel_reduce(tbb::blocked_range<size_t>(0,
               ref_depth_img.cols*ref_depth_img.rows, 10000), pose_ref);
 
-          LHS           = pose_ref.LHS;
-          RHS           = pose_ref.RHS;
-          squared_error = pose_ref.error;
+          LHS                  = pose_ref.LHS;
+          RHS                  = pose_ref.RHS;
+          squared_error        = pose_ref.error;
           number_observations  = pose_ref.num_obs;
 
           // Get covariance.
@@ -752,7 +765,8 @@ class DTrack
     ///////////////////////////////////////////////////////////////////////////
     inline calibu::CameraModelGeneric<double> _ScaleCM(
         calibu::CameraModelGeneric<double> cam_model,
-        unsigned int                       level)
+        unsigned int                       level
+      )
     {
       const float scale = 1.0f/(1 << level);
 
