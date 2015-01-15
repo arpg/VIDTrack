@@ -52,7 +52,7 @@ link_directories(${Pangolin_LIBRARY_DIRS})
 
 add_subdirectory(AuxGUI)
 
-list(APPEND HDRS dtrack.h)
+list(APPEND HDRS ceres_dense_ba.h dtrack.h muse.h)
 list(APPEND SRCS main.cpp)
 
 add_executable(devil ${HDRS} ${SRCS})

@@ -24,6 +24,7 @@
 #include "AuxGUI/GLPathAbs.h"
 
 #include "dtrack.h"
+#include "muse.h"
 #include "ceres_dense_ba.h"
 
 
@@ -102,6 +103,7 @@ int main(int argc, char** argv)
   pangolin::CreatePanel("ui").SetBounds(0, 1, 0, pangolin::Attach::Pix(panel_size));
   pangolin::Var<bool>  ui_camera_follow("ui.Camera Follow", false, true);
   pangolin::Var<bool>  ui_reset("ui.Reset", true, false);
+  pangolin::Var<bool>  ui_use_gt_depth("ui.Use GT Depth", true, true);
   pangolin::Var<bool>  ui_use_gt_poses("ui.Use GT Poses", false, true);
   pangolin::Var<bool>  ui_use_constant_velocity("ui.Use Const Vel Model", false, true);
   pangolin::Var<bool>  ui_use_imu_estimates("ui.Use IMU Estimates", false, true);
