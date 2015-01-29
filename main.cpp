@@ -101,16 +101,17 @@ int main(int argc, char** argv)
   // Set up panel.
   const unsigned int panel_size = 180;
   pangolin::CreatePanel("ui").SetBounds(0, 1, 0, pangolin::Attach::Pix(panel_size));
-  pangolin::Var<bool>  ui_camera_follow("ui.Camera Follow", false, true);
-  pangolin::Var<bool>  ui_reset("ui.Reset", true, false);
-  pangolin::Var<bool>  ui_use_gt_depth("ui.Use GT Depth", true, true);
-  pangolin::Var<bool>  ui_use_gt_poses("ui.Use GT Poses", false, true);
-  pangolin::Var<bool>  ui_use_constant_velocity("ui.Use Const Vel Model", false, true);
-  pangolin::Var<bool>  ui_use_imu_estimates("ui.Use IMU Estimates", false, true);
-  pangolin::Var<bool>  ui_use_pyramid("ui.Use Pyramid", true, true);
-  pangolin::Var<bool>  ui_show_vo_path("ui.Show VO Path", true, true);
-  pangolin::Var<bool>  ui_show_ba_path("ui.Show BA Path", true, true);
-  pangolin::Var<bool>  ui_show_gt_path("ui.Show GT Path", true, true);
+  pangolin::Var<bool>           ui_camera_follow("ui.Camera Follow", false, true);
+  pangolin::Var<bool>           ui_reset("ui.Reset", true, false);
+//  pangolin::Var<bool>           ui_use_gt_depth("ui.Use GT Depth", true, true);
+  pangolin::Var<bool>           ui_use_gt_poses("ui.Use GT Poses", false, true);
+  pangolin::Var<bool>           ui_use_constant_velocity("ui.Use Const Vel Model", false, true);
+  pangolin::Var<bool>           ui_use_imu_estimates("ui.Use IMU Estimates", false, true);
+  pangolin::Var<bool>           ui_use_pyramid("ui.Use Pyramid", true, true);
+  pangolin::Var<unsigned int>   ui_ba_window("ui.BA Window", 5, 0, 20);
+  pangolin::Var<bool>           ui_show_vo_path("ui.Show VO Path", true, true);
+  pangolin::Var<bool>           ui_show_ba_path("ui.Show BA Path", true, true);
+  pangolin::Var<bool>           ui_show_gt_path("ui.Show GT Path", true, true);
 
   // Set up container.
   pangolin::View& container = pangolin::CreateDisplay();
@@ -194,6 +195,7 @@ int main(int argc, char** argv)
   bool paused       = true;
   bool step_once    = false;
   bool run_ba       = false;
+  bool run_batch_ba = false;
 
 
   ///----- Load camera model.
@@ -380,8 +382,8 @@ int main(int argc, char** argv)
                                      [&ui_reset] {
                                         ui_reset = true; });
   pangolin::RegisterKeyPressCallback('o',
-                                     [&run_ba] {
-                                        run_ba = !run_ba; });
+                                     [&run_batch_ba] {
+                                        run_batch_ba = !run_batch_ba; });
 
   ///----- Init general variables.
   std::vector<Pose>     dtrack_map;
@@ -402,7 +404,6 @@ int main(int argc, char** argv)
   /////////////////////////////////////////////////////////////////////////////
   ///---- MAIN LOOP
   ///
-
   while (!pangolin::ShouldQuit()) {
 
     // Start timer.
@@ -421,7 +422,7 @@ int main(int argc, char** argv)
 
       // Re-initialize camera.
       if (!camera.GetDeviceProperty(hal::DeviceDirectory).empty()) {
-       camera = hal::Camera(cl_args.follow("", "-cam"));
+//       camera = hal::Camera(cl_args.follow("", "-cam"));
       }
 
       // Reset frame counter.
@@ -560,9 +561,98 @@ int main(int argc, char** argv)
       }
     }
 
-
-    ///----- Run BA ...
+    ///----- Run Windowed BA ...
     if (pangolin::Pushed(run_ba)) {
+
+        // Init BA.
+        options.regularize_biases_in_batch  = true;
+        options.use_triangular_matrices = false;
+        options.use_sparse_solver = false;
+        options.use_dogleg = true;
+        //ba::debug_level_threshold = 1;
+        bundle_adjuster.Init(options, 200, 2000);
+        bundle_adjuster.AddCamera(rig.cameras_[0], rig.t_wc_[0]);
+        Eigen::Matrix<double, 3, 1> gravity;
+
+        gravity << 0, 0, -9.806;
+        bundle_adjuster.SetGravity(gravity);
+
+        // Reset IMU residuals IDs.
+        imu_residual_ids.clear();
+
+        // Push first pose.
+        Sophus::SE3d global_pose;
+        {
+          Sophus::SO3d& rot = global_pose.so3();
+          rot = calibu::RdfRobotics;
+        }
+
+        int cur_id, prev_id;
+        prev_id = bundle_adjuster.AddPose(global_pose, true, 0);
+
+        Eigen::Matrix6d cov;
+        cov.setIdentity();
+        cov *= 1e-6;
+
+        // Push rest of poses.
+        std::cout << "DTrack Map Size: " << dtrack_map.size() << std::endl;
+        for (size_t ii = 0; ii < dtrack_map.size(); ++ii) {
+          Pose& pose = dtrack_map[ii];
+          global_pose *= pose.Tab;
+          cur_id = bundle_adjuster.AddPose(global_pose, true, pose.timeB);
+
+          /*m
+          std::cout << "GT Rel Pose: " <<
+                Sophus::SE3::log(poses[ii].inverse() * poses[ii+1]).transpose()
+                        << std::endl;
+
+          std::cout << "VO Rel Pose: " <<
+                Sophus::SE3::log(pose.Tab).transpose() << std::endl;
+
+          std::cout << "ERROR Rel Pose: " <<
+                Sophus::SE3::log(pose.Tab.inverse()*poses[ii].inverse()*poses[ii+1]).transpose() << std::endl;
+          */
+
+//          bundle_adjuster.AddBinaryConstraint(prev_id, cur_id, pose.Tab, cov);
+          bundle_adjuster.AddBinaryConstraint(prev_id, cur_id, pose.Tab, pose.covariance);
+//          bundle_adjuster.AddBinaryConstraint(prev_id, cur_id, poses[ii].inverse() * poses[ii+1], cov);
+
+          // Get IMU measurements between frames.
+          std::vector<ImuMeasurement> imu_measurements =
+              imu_buffer.GetRange(pose.timeA, pose.timeB);
+
+          // Add IMU constraints.
+          imu_residual_ids.push_back(
+                bundle_adjuster.AddImuResidual(prev_id, cur_id, imu_measurements));
+
+          // Update pose IDs.
+          prev_id = cur_id;
+      }
+
+      // Run solver.
+      bundle_adjuster.Solve(1000, 1.0);
+
+      ///----- Update GUI objects.
+      path_ba_vec.clear();
+      for (size_t ii = 0; ii < frame_index; ++ii) {
+        ba::PoseT<double> pose = bundle_adjuster.GetPose(ii);
+        path_ba_vec.push_back(pose.t_wp);
+      }
+
+
+      // Update error.
+      ba::PoseT<double> pose = bundle_adjuster.GetPose(frame_index-1);
+      Sophus::SE3d gt_pose = permutation * (poses[0].inverse() * poses[frame_index-1]);
+      analytics["BA Path Error"] =
+          Sophus::SE3::log(pose.t_wp.inverse() * gt_pose).head(3).norm();
+
+      // Update analytics.
+      analytics_view.Update(analytics);
+    }
+
+
+    ///----- Run Batch BA ...
+    if (pangolin::Pushed(run_batch_ba)) {
 
         // Init BA.
         options.regularize_biases_in_batch  = true;
