@@ -327,28 +327,6 @@ int main(int argc, char** argv)
     fclose(fd);
   }
 
-  ///----- Load image timestamps.
-  std::vector<double> image_timestamps;
-  {
-    std::string timestamps_file = cl_args.follow("", "-timestamps");
-    if (timestamps_file.empty()) {
-      std::cerr << "- NOTE: No timestamps file given. It is required!" << std::endl;
-      exit(EXIT_FAILURE);
-    }
-    timestamps_file = camera.GetDeviceProperty(hal::DeviceDirectory) + "/" + timestamps_file;
-    FILE* fd = fopen(timestamps_file.c_str(), "r");
-    double timestamp;
-
-    std::cout << "- Loading timestamps file: '" << timestamps_file << "'" << std::endl;
-
-    while (fscanf(fd, "%lf", &timestamp) != EOF) {
-      image_timestamps.push_back(timestamp);
-    }
-    fclose(fd);
-    std::cout << "- NOTE: " << image_timestamps.size() << " timestamps loaded." << std::endl;
-  }
-
-
   ///----- Register callbacks.
   // Hide/Show panel.
   pangolin::RegisterKeyPressCallback('~', [&](){
@@ -391,6 +369,8 @@ int main(int argc, char** argv)
   Sophus::SE3d          current_pose;
   Sophus::SE3d          pose_estimate;
   Eigen::Matrix6d       pose_covariance;
+  double                current_timestamp;
+  double                keyframe_timestamp;
   bool                  ba_has_run;
 
   // Image holder.
@@ -444,6 +424,7 @@ int main(int argc, char** argv)
       // Reset reference image for DTrack.
       keyframe_image = current_image;
       keyframe_depth = images->at(1)->Mat();
+      keyframe_timestamp = images->at(0)->Timestamp();
 
       // Increment frame counter.
       frame_index++;
@@ -460,6 +441,8 @@ int main(int argc, char** argv)
       } else {
         // Convert to float and normalize.
         cv::Mat current_image = ConvertAndNormalize(images->at(0)->Mat());
+        current_timestamp = images->at(0)->Timestamp();
+        std::cout << "Timestamps is: " << current_timestamp << std::endl;
 
         // Get pose for this image.
         timer.Tic("DTrack");
@@ -479,13 +462,12 @@ int main(int argc, char** argv)
 
             // Get IMU measurements between previous frame and current frame.
             std::vector<ImuMeasurement> imu_measurements =
-                imu_buffer.GetRange(image_timestamps[frame_index-1],
-                image_timestamps[frame_index]);
+                imu_buffer.GetRange(keyframe_timestamp, current_timestamp);
 
             if (imu_measurements.size() == 0) {
               std::cerr << "Could not find imu measurements between : " <<
-                           image_timestamps[frame_index-1] << " and " <<
-                           image_timestamps[frame_index] << std::endl;
+                           keyframe_timestamp << " and " <<
+                           current_timestamp << std::endl;
               exit(EXIT_FAILURE);
             }
 
@@ -521,8 +503,8 @@ int main(int argc, char** argv)
         Pose pose;
         pose.Tab        = pose_estimate;
         pose.covariance = pose_covariance;
-        pose.timeA      = image_timestamps[frame_index-1];
-        pose.timeB      = image_timestamps[frame_index];
+        pose.timeA      = keyframe_timestamp;
+        pose.timeB      = current_timestamp;
         dtrack_map.push_back(pose);
         analytics["DTrack RMS"] = dtrack_error;
         timer.Toc("DTrack");
@@ -535,7 +517,8 @@ int main(int argc, char** argv)
         }
 
         // Update pose.
-        Sophus::SE3d gt_pose = permutation * (poses[0].inverse() * poses[frame_index]);
+        Sophus::SE3d gt_pose = permutation *
+                          (poses[0].inverse() * poses[frame_index]);
         current_pose = current_pose * pose_estimate;
 
 
@@ -547,6 +530,8 @@ int main(int argc, char** argv)
         // Reset reference image for DTrack.
         keyframe_image = current_image;
         keyframe_depth = images->at(1)->Mat();
+        keyframe_timestamp = current_timestamp;
+
 
         // Update path.
         path_vo_vec.push_back(pose_estimate);
@@ -601,7 +586,7 @@ int main(int argc, char** argv)
           global_pose *= pose.Tab;
           cur_id = bundle_adjuster.AddPose(global_pose, true, pose.timeB);
 
-          /*m
+          /*
           std::cout << "GT Rel Pose: " <<
                 Sophus::SE3::log(poses[ii].inverse() * poses[ii+1]).transpose()
                         << std::endl;
