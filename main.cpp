@@ -5,17 +5,18 @@
 #include <sophus/sophus.hpp>
 #include <opencv2/opencv.hpp>
 
-#include <HAL/Utils/GetPot>
-#include <HAL/Utils/TicToc.h>
-#include <HAL/Camera/CameraDevice.h>
-#include <pangolin/pangolin.h>
-#include <SceneGraph/SceneGraph.h>
-#include <calibu/Calibu.h>
-#include <calibu/calib/LocalParamSe3.h>
-#include <calibu/calib/CostFunctionAndParams.h>
 #include <ba/BundleAdjuster.h>
 #include <ba/Types.h>
 #include <ba/InterpolationBuffer.h>
+#include <calibu/Calibu.h>
+#include <calibu/calib/LocalParamSe3.h>
+#include <calibu/calib/CostFunctionAndParams.h>
+#include <HAL/Utils/GetPot>
+#include <HAL/Utils/TicToc.h>
+#include <HAL/Camera/CameraDevice.h>
+#include <HAL/IMU/IMUDevice.h>
+#include <pangolin/pangolin.h>
+#include <SceneGraph/SceneGraph.h>
 
 #include "AuxGUI/AnalyticsView.h"
 #include "AuxGUI/Timer.h"
@@ -72,6 +73,26 @@ struct Pose {
 };
 
 
+/////////////////////////////////////////////////////////////////////////////
+typedef ba::ImuMeasurementT<double>               ImuMeasurement;
+ba::InterpolationBufferT<ImuMeasurement, double>  imu_buffer;
+
+void IMU_Handler(pb::ImuMsg& IMUdata) {
+  Eigen::Vector3d a(IMUdata.accel().data(0),
+                    IMUdata.accel().data(1),
+                    IMUdata.accel().data(2));
+  Eigen::Vector3d w(IMUdata.gyro().data(0),
+                    IMUdata.gyro().data(1),
+                    IMUdata.gyro().data(2));
+
+  std::cout << "=== Adding ->> T: " << IMUdata.system_time()
+            << " A: " << a.transpose() << "  G:"
+            << w.transpose() << std::endl;
+
+  ImuMeasurement imu(w, a, IMUdata.system_time());
+  imu_buffer.AddElement(imu);
+}
+
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
@@ -86,13 +107,22 @@ int main(int argc, char** argv)
     std::cerr << "Camera arguments missing!" << std::endl;
     exit(EXIT_FAILURE);
   }
-
   hal::Camera camera(cl_args.follow("", "-cam"));
 
   const int image_width = camera.Width();
   const int image_height = camera.Height();
   std::cout << "- Image Dimensions: " << image_width <<
                "x" << image_height << std::endl;
+
+
+  ///----- Initialize IMU.
+  if (!cl_args.search("-imu")) {
+    std::cerr << "IMU arguments missing!" << std::endl;
+    exit(EXIT_FAILURE);
+  }
+  hal::IMU imu(cl_args.follow("", "-imu"));
+  imu.RegisterIMUDataCallback(&IMU_Handler);
+  std::cout << "- Registering IMU device." << std::endl;
 
 
   ///----- Set up GUI.
@@ -225,9 +255,7 @@ int main(int argc, char** argv)
       old_rig.cameras[0].camera, Sophus::SE3d());
 
   ///----- Init BA stuff.
-  typedef ba::ImuMeasurementT<double>               ImuMeasurement;
   std::vector<uint32_t>                             imu_residual_ids;
-  ba::InterpolationBufferT<ImuMeasurement, double>  imu_buffer;
   ba::BundleAdjuster<double, 0, 9, 0>               bundle_adjuster;
   ba::Options<double>                               options;
 
@@ -297,6 +325,7 @@ int main(int argc, char** argv)
     fclose(fd);
   }
 
+#if 0
   ///----- Load file of IMU measurements (required).
   {
     std::string imu_file = cl_args.follow("", "-imu");
@@ -326,6 +355,7 @@ int main(int argc, char** argv)
     std::cout << "- NOTE: " << imu_count << " IMU measurements loaded." << std::endl;
     fclose(fd);
   }
+#endif
 
   ///----- Register callbacks.
   // Hide/Show panel.
@@ -442,7 +472,7 @@ int main(int argc, char** argv)
         // Convert to float and normalize.
         cv::Mat current_image = ConvertAndNormalize(images->at(0)->Mat());
         current_timestamp = images->at(0)->Timestamp();
-        std::cout << "Timestamps is: " << current_timestamp << std::endl;
+        std::cout << "=== Image timestamps is: " << current_timestamp << std::endl;
 
         // Get pose for this image.
         timer.Tic("DTrack");
@@ -559,7 +589,8 @@ int main(int argc, char** argv)
         bundle_adjuster.AddCamera(rig.cameras_[0], rig.t_wc_[0]);
         Eigen::Matrix<double, 3, 1> gravity;
 
-        gravity << 0, 0, -9.806;
+//        gravity << 0, 0, -9.806;
+        gravity << 0, -9.806, 0;
         bundle_adjuster.SetGravity(gravity);
 
         // Reset IMU residuals IDs.
