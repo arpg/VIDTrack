@@ -28,6 +28,7 @@
 #include "muse.h"
 #include "ceres_dense_ba.h"
 
+#define DEBUG 0
 
 ///////////////////////////////////////////////////////////////////////////
 /// Generates a "heat map" based on an error image provided.
@@ -76,6 +77,7 @@ struct Pose {
 /////////////////////////////////////////////////////////////////////////////
 typedef ba::ImuMeasurementT<double>               ImuMeasurement;
 ba::InterpolationBufferT<ImuMeasurement, double>  imu_buffer;
+std::mutex                                        imu_mutex;
 
 void IMU_Handler(pb::ImuMsg& IMUdata) {
   Eigen::Vector3d a(IMUdata.accel().data(0),
@@ -85,12 +87,16 @@ void IMU_Handler(pb::ImuMsg& IMUdata) {
                     IMUdata.gyro().data(1),
                     IMUdata.gyro().data(2));
 
+#if DEBUG
   std::cout << "=== Adding ->> T: " << IMUdata.system_time()
             << " A: " << a.transpose() << "  G:"
             << w.transpose() << std::endl;
+#endif
 
   ImuMeasurement imu(w, a, IMUdata.system_time());
+  imu_mutex.lock();
   imu_buffer.AddElement(imu);
+  imu_mutex.unlock();
 }
 
 
@@ -133,7 +139,7 @@ int main(int argc, char** argv)
   pangolin::CreatePanel("ui").SetBounds(0, 1, 0, pangolin::Attach::Pix(panel_size));
   pangolin::Var<bool>           ui_camera_follow("ui.Camera Follow", false, true);
   pangolin::Var<bool>           ui_reset("ui.Reset", true, false);
-//  pangolin::Var<bool>           ui_use_gt_depth("ui.Use GT Depth", true, true);
+  pangolin::Var<bool>           ui_use_gt_depth("ui.Use GT Depth", true, true);
   pangolin::Var<bool>           ui_use_gt_poses("ui.Use GT Poses", false, true);
   pangolin::Var<bool>           ui_use_constant_velocity("ui.Use Const Vel Model", false, true);
   pangolin::Var<bool>           ui_use_imu_estimates("ui.Use IMU Estimates", false, true);
@@ -325,38 +331,6 @@ int main(int argc, char** argv)
     fclose(fd);
   }
 
-#if 0
-  ///----- Load file of IMU measurements (required).
-  {
-    std::string imu_file = cl_args.follow("", "-imu");
-    if (imu_file.empty()) {
-      std::cerr << "- NOTE: No IMU file given. It is required!" << std::endl;
-      exit(EXIT_FAILURE);
-    }
-    imu_file = camera.GetDeviceProperty(hal::DeviceDirectory) + "/" + imu_file;
-    FILE* fd = fopen(imu_file.c_str(), "r");
-    float timestamp, accelX, accelY, accelZ, gyroX, gyroY, gyroZ;
-
-    std::cout << "- Loading IMU measurements file: '" << imu_file << "'" << std::endl;
-
-    int imu_count = 0;
-    while (fscanf(fd, "%f\t%f\t%f\t%f\t%f\t%f\t%f", &timestamp, &accelX, &accelY,
-                  &accelZ, &gyroX, &gyroY, &gyroZ) != EOF) {
-
-      Eigen::Vector3d a(accelX, accelY, accelZ);
-      Eigen::Vector3d w(gyroX, gyroY, gyroZ);
-
-      ImuMeasurement imu(w, a, timestamp);
-      imu_buffer.AddElement(imu);
-      //std::cerr << "Added accel: " << a.transpose() << " and gyro " <<
-      //             w.transpose() << " at time " << timestamp << std::endl;
-      imu_count++;
-    }
-    std::cout << "- NOTE: " << imu_count << " IMU measurements loaded." << std::endl;
-    fclose(fd);
-  }
-#endif
-
   ///----- Register callbacks.
   // Hide/Show panel.
   pangolin::RegisterKeyPressCallback('~', [&](){
@@ -472,7 +446,10 @@ int main(int argc, char** argv)
         // Convert to float and normalize.
         cv::Mat current_image = ConvertAndNormalize(images->at(0)->Mat());
         current_timestamp = images->at(0)->Timestamp();
+
+#if DEBUG
         std::cout << "=== Image timestamps is: " << current_timestamp << std::endl;
+#endif
 
         // Get pose for this image.
         timer.Tic("DTrack");
@@ -586,11 +563,10 @@ int main(int argc, char** argv)
         options.use_dogleg = true;
         //ba::debug_level_threshold = 1;
         bundle_adjuster.Init(options, 200, 2000);
-        bundle_adjuster.AddCamera(rig.cameras_[0], rig.t_wc_[0]);
+        bundle_adjuster.AddCamera(rig.cameras_[0], rig.t_wc_[0].inverse());
         Eigen::Matrix<double, 3, 1> gravity;
 
-//        gravity << 0, 0, -9.806;
-        gravity << 0, -9.806, 0;
+        gravity << 0, 0, -9.806;
         bundle_adjuster.SetGravity(gravity);
 
         // Reset IMU residuals IDs.
@@ -617,7 +593,7 @@ int main(int argc, char** argv)
           global_pose *= pose.Tab;
           cur_id = bundle_adjuster.AddPose(global_pose, true, pose.timeB);
 
-          /*
+#if DEBUG
           std::cout << "GT Rel Pose: " <<
                 Sophus::SE3::log(poses[ii].inverse() * poses[ii+1]).transpose()
                         << std::endl;
@@ -627,7 +603,7 @@ int main(int argc, char** argv)
 
           std::cout << "ERROR Rel Pose: " <<
                 Sophus::SE3::log(pose.Tab.inverse()*poses[ii].inverse()*poses[ii+1]).transpose() << std::endl;
-          */
+#endif
 
 //          bundle_adjuster.AddBinaryConstraint(prev_id, cur_id, pose.Tab, cov);
           bundle_adjuster.AddBinaryConstraint(prev_id, cur_id, pose.Tab, pose.covariance);
@@ -707,7 +683,7 @@ int main(int argc, char** argv)
           global_pose *= pose.Tab;
           cur_id = bundle_adjuster.AddPose(global_pose, true, pose.timeB);
 
-          /*
+#if DEBUG
           std::cout << "GT Rel Pose: " <<
                 Sophus::SE3::log(poses[ii].inverse() * poses[ii+1]).transpose()
                         << std::endl;
@@ -717,7 +693,7 @@ int main(int argc, char** argv)
 
           std::cout << "ERROR Rel Pose: " <<
                 Sophus::SE3::log(pose.Tab.inverse()*poses[ii].inverse()*poses[ii+1]).transpose() << std::endl;
-          */
+#endif
 
 //          bundle_adjuster.AddBinaryConstraint(prev_id, cur_id, pose.Tab, cov);
           bundle_adjuster.AddBinaryConstraint(prev_id, cur_id, pose.Tab, pose.covariance);
@@ -726,6 +702,11 @@ int main(int argc, char** argv)
           // Get IMU measurements between frames.
           std::vector<ImuMeasurement> imu_measurements =
               imu_buffer.GetRange(pose.timeA, pose.timeB);
+
+#if DEBUG
+          std::cout << "Number of IMU measurements between frames: " <<
+                       imu_measurements.size() << std::endl;
+#endif
 
           // Add IMU constraints.
           imu_residual_ids.push_back(
