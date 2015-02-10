@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2013  Juan M. Falquez,
- *                     George Washington University
+ * Copyright (c) 2014  Juan M. Falquez,
+ *                     University of Colorado - Boulder
  *
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -463,7 +463,7 @@ class DTrack
       std::vector<unsigned int> vec_max_iterations = {1, 2, 3, 4};
 
       if (use_pyramid == false) {
-        vec_max_iterations = {1, 0, 0, 0};
+        vec_max_iterations = {1, 0, 0, 5};
       }
 
       // Aux variables.
@@ -532,9 +532,10 @@ class DTrack
           number_observations  = pose_ref.num_obs;
 
           // Get covariance.
-          if (pyramid_lvl == 0) {
+          if (pyramid_lvl == 0 && num_iters == 0) {
             covariance = pose_ref.hessian.inverse();
           }
+
 #else
           // Iterate through depth map.
           for (int row = 0; row < ref_depth_img.rows; ++row) {
@@ -724,14 +725,14 @@ class DTrack
             Trl = (Tlr*Sophus::SE3Group<double>::exp(X)).inverse();
 
             if (X.norm() < 1e-5) {
-//              printf("DTRACK: notice(@L%d I%d) Update is too small. Breaking early!\n",
-//                     pyramid_lvl+1, num_iters+1);
+              printf("DTRACK: notice(@L%d I%d) Update is too small. Breaking early!\n",
+                     pyramid_lvl+1, num_iters+1);
 
               break;
             }
           } else {
-//            printf("DTRACK: notice(@L%d I%d) Error is increasing. Breaking early!\n",
-//                   pyramid_lvl+1, num_iters+1);
+            printf("DTRACK: notice(@L%d I%d) Error is increasing. Breaking early!\n",
+                   pyramid_lvl+1, num_iters+1);
 
             break;
           }
