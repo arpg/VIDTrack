@@ -34,18 +34,18 @@
 
 /////////////////////////////////////////////////////////////////////////////
 namespace Eigen {
-#define USING_VECTOR_ARRAY(size)                            \
-  using Vector##size##tArray =                              \
-  std::vector<Matrix<double, size, 1>,                      \
-  Eigen::aligned_allocator<Matrix<double, size, 1>>>;
+//#define USING_VECTOR_ARRAY(size)                            \
+//  using Vector##size##tArray =                              \
+//  std::vector<Matrix<double, size, 1>,                      \
+//  Eigen::aligned_allocator<Matrix<double, size, 1>>>;
 
-  USING_VECTOR_ARRAY(2);
-  USING_VECTOR_ARRAY(3);
-  USING_VECTOR_ARRAY(4);
-  USING_VECTOR_ARRAY(5);
-  USING_VECTOR_ARRAY(6);
+//  USING_VECTOR_ARRAY(2);
+//  USING_VECTOR_ARRAY(3);
+//  USING_VECTOR_ARRAY(4);
+//  USING_VECTOR_ARRAY(5);
+//  USING_VECTOR_ARRAY(6);
 
-#undef USING_VECTOR_ARRAY
+//#undef USING_VECTOR_ARRAY
 
   typedef Matrix<double, 2, 3> Matrix2x3d;
   typedef Matrix<double, 3, 4> Matrix3x4d;

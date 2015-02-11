@@ -3,8 +3,6 @@ project(libDEVIL)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake_modules/")
 
-##################################
-# REMOVE THIS WHEN APPLICATION WORKS
 
 find_package(Eigen3 REQUIRED)
 find_package(Sophus REQUIRED)
@@ -39,8 +37,8 @@ include_directories(${TBB_INCLUDE_DIRS})
 link_directories(${Pangolin_LIBRARY_DIRS})
 
 
-list(APPEND HDRS dtrack.h)
-list(APPEND SRCS )
+list(APPEND HDRS tracker.h)
+list(APPEND SRCS tracker.cpp)
 
 add_library(devil ${HDRS} ${SRCS})
 
