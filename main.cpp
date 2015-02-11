@@ -388,7 +388,7 @@ int main(int argc, char** argv)
 //  tmp = SceneGraph::GLCart2T(0, 0, 0, M_PI/2.0, 0, M_PI/2.0);
 //  Sophus::SE3d permutation(tmp);
   Sophus::SE3d permutation;
-//  permutation.so3() = calibu::RdfRobotics;
+  permutation.so3() = calibu::RdfRobotics;
 
 
   /////////////////////////////////////////////////////////////////////////////
@@ -491,23 +491,27 @@ int main(int argc, char** argv)
 
             std::vector<ba::ImuPoseT<double>> imu_poses;
 
+            ba::PoseT<double> last_pose =
+                bundle_adjuster.GetPose(bundle_adjuster.GetNumPoses() - 1);
+
             ba::ImuPoseT<double> new_pose =
-                decltype(bundle_adjuster)::ImuResidual::IntegrateResidual(last_adjusted_pose,
-                imu_measurements, last_adjusted_pose.b.head<3>(), last_adjusted_pose.b.tail<3>(),
+                decltype(bundle_adjuster)::ImuResidual::IntegrateResidual(last_pose,
+                imu_measurements, last_pose.b.head<3>(), last_pose.b.tail<3>(),
                 bundle_adjuster.GetImuCalibration().g_vec, imu_poses);
 
             // Get new relative transform to seed ESM.
-            Sophus::SE3d pe;
-            pose_estimate = last_adjusted_pose.t_wp.inverse() * new_pose.t_wp;
-            pe = last_adjusted_pose.t_wp.inverse() * new_pose.t_wp;
+            pose_estimate = last_pose.t_wp.inverse() * new_pose.t_wp;
 
-            std::cout << "Real Pose Estimate: " <<
+#if DTRACK_DEBUG
+            Sophus::SE3d real_pose_transform;
+            real_pose_transform = last_pose.t_wp.inverse() * new_pose.t_wp;
+            std::cout << "Real Pose Transform: " <<
                   Sophus::SE3::log(poses[frame_index-1].inverse() * poses[frame_index]).transpose()
                           << std::endl;
 
-            std::cout << "Integrated Pose Estimate: " <<
-                         Sophus::SE3::log(pe).transpose()
-                                 << std::endl;
+            std::cout << "Integrated Pose: " <<
+                         Sophus::SE3::log(real_pose_transform).transpose() << std::endl;
+#endif
           }
         }
 
@@ -546,8 +550,6 @@ int main(int argc, char** argv)
           ba::debug_level_threshold = -1;
           bundle_adjuster.Init(options, 10, 1000);
           bundle_adjuster.AddCamera(rig.cameras_[0], rig.t_wc_[0]);
-//          Sophus::SE3d bleh;
-//          bundle_adjuster.AddCamera(rig.cameras_[0], bleh);
 
 #if 0
           Eigen::Matrix<double, 3, 1> gravity;
@@ -561,12 +563,11 @@ int main(int argc, char** argv)
           // Push last adjusted pose.
           int cur_id, prev_id;
           Sophus::SE3d global_pose = last_adjusted_pose.t_wp;
-//          prev_id = bundle_adjuster.AddPose(global_pose, true, dtrack_map[0].timeA);
           prev_id = bundle_adjuster.AddPose(last_adjusted_pose.t_wp,
                                             last_adjusted_pose.t_vs,
                                             last_adjusted_pose.cam_params,
                                             last_adjusted_pose.v_w,
-                                            last_adjusted_pose.b, true, //ba_has_run?false:true,
+                                            last_adjusted_pose.b, true,
                                             last_adjusted_pose.time);
 
           Eigen::Matrix6d cov;
@@ -580,8 +581,8 @@ int main(int argc, char** argv)
             cur_id = bundle_adjuster.AddPose(global_pose, true, pose.timeB);
 
 //            bundle_adjuster.AddBinaryConstraint(prev_id, cur_id, pose.Tab, cov);
-//            bundle_adjuster.AddBinaryConstraint(prev_id, cur_id, pose.Tab, pose.covariance);
-            bundle_adjuster.AddBinaryConstraint(prev_id, cur_id, poses[ii].inverse() * poses[ii+1], cov);
+            bundle_adjuster.AddBinaryConstraint(prev_id, cur_id, pose.Tab, pose.covariance);
+//            bundle_adjuster.AddBinaryConstraint(prev_id, cur_id, poses[ii].inverse() * poses[ii+1], cov);
 
             // Get IMU measurements between frames.
             std::vector<ImuMeasurement> imu_measurements =
