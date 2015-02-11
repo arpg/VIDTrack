@@ -1,20 +1,7 @@
 cmake_minimum_required(VERSION 2.8.10)
-project(DEVIL)
+project(libDEVIL)
 
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake_modules/")
-
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++0x")
-
-# Library files.
-#add_subdirectory(libdevil)
-
-
-# Example applications.
-option(BUILD_APPLICATIONS "Build Applications" ON)
-if(BUILD_APPLICATIONS)
-    add_subdirectory(applications)
-endif()
-
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake_modules/")
 
 ##################################
 # REMOVE THIS WHEN APPLICATION WORKS
@@ -51,25 +38,21 @@ include_directories(${TBB_INCLUDE_DIRS})
 
 link_directories(${Pangolin_LIBRARY_DIRS})
 
-#add_subdirectory(AuxGUI)
 
-list(APPEND HDRS ceres_dense_ba.h dtrack.h muse.h)
-list(APPEND SRCS main.cpp)
+list(APPEND HDRS dtrack.h)
+list(APPEND SRCS )
 
-#add_executable(devil ${HDRS} ${SRCS})
+add_library(devil ${HDRS} ${SRCS})
 
-#add_dependencies(devil AuxGUI)
-
-#target_link_libraries(devil AuxGUI)
-#target_link_libraries(devil ${OpenCV2_LIBRARIES})
-#target_link_libraries(devil ${HAL_LIBRARIES})
-#target_link_libraries(devil ${PbMsgs_LIBRARIES})
-#target_link_libraries(devil ${Pangolin_LIBRARIES})
-#target_link_libraries(devil ${SceneGraph_LIBRARIES})
-#target_link_libraries(devil ${Calibu_LIBRARIES})
-#target_link_libraries(devil ${BA_LIBRARIES})
-#target_link_libraries(devil ${CERES_LIBRARIES})
-#target_link_libraries(devil ${PROTOBUF_LIBRARIES})
-#if(TBB_FOUND)
-#  target_link_libraries(devil ${TBB_LIBRARIES})
-#endif()
+target_link_libraries(devil ${OpenCV2_LIBRARIES})
+target_link_libraries(devil ${HAL_LIBRARIES})
+target_link_libraries(devil ${PbMsgs_LIBRARIES})
+target_link_libraries(devil ${Pangolin_LIBRARIES})
+target_link_libraries(devil ${SceneGraph_LIBRARIES})
+target_link_libraries(devil ${Calibu_LIBRARIES})
+target_link_libraries(devil ${BA_LIBRARIES})
+target_link_libraries(devil ${CERES_LIBRARIES})
+target_link_libraries(devil ${PROTOBUF_LIBRARIES})
+if(TBB_FOUND)
+  target_link_libraries(devil ${TBB_LIBRARIES})
+endif()

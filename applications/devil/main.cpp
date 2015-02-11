@@ -18,11 +18,11 @@
 #include <pangolin/pangolin.h>
 #include <SceneGraph/SceneGraph.h>
 
-#include "AuxGUI/AnalyticsView.h"
-#include "AuxGUI/Timer.h"
-#include "AuxGUI/TimerView.h"
-#include "AuxGUI/GLPathRel.h"
-#include "AuxGUI/GLPathAbs.h"
+#include <libGUI/AnalyticsView.h>
+#include <libGUI/Timer.h>
+#include <libGUI/TimerView.h>
+#include <libGUI/GLPathRel.h>
+#include <libGUI/GLPathAbs.h>
 
 #include "dtrack.h"
 
