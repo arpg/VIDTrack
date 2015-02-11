@@ -28,7 +28,7 @@
 #include "muse.h"
 #include "ceres_dense_ba.h"
 
-#define DEBUG 0
+#define DEVIL_DEBUG 0
 
 ///////////////////////////////////////////////////////////////////////////
 /// Generates a "heat map" based on an error image provided.
@@ -87,7 +87,7 @@ void IMU_Handler(pb::ImuMsg& IMUdata) {
                     IMUdata.gyro().data(1),
                     IMUdata.gyro().data(2));
 
-#if DEBUG
+#if DEVIL_DEBUG
   std::cout << "=== Adding ->> T: " << IMUdata.system_time()
             << " A: " << a.transpose() << "  G:"
             << w.transpose() << std::endl;
@@ -309,9 +309,10 @@ int main(int argc, char** argv)
         poses.push_back(T);
       } else if (cl_args.search("-C")) {
         // Custom setting.
-        Sophus::SE3d Tt(SceneGraph::GLCart2T(0, 0, 0, 0, -M_PI/2.0, -M_PI/2.0));
-        poses.push_back(calibu::ToCoordinateConvention(T,
-                                                       calibu::RdfRobotics.inverse())*Tt);
+        pose(0) *= -1;
+        pose(2) *= -1;
+        Sophus::SE3d Tt(SceneGraph::GLCart2T(pose));
+        poses.push_back(Tt);
       } else if (cl_args.search("-T")) {
         // Tsukuba convention.
         Eigen::Matrix3d tsukuba_convention;
@@ -382,8 +383,12 @@ int main(int argc, char** argv)
   std::shared_ptr<pb::ImageArray> images = pb::ImageArray::Create();
 
   // Permutation matrix to bring things into robotic reference frame.
+//  Sophus::SE3d permutation = rig.t_wc_[0].inverse();
+  Eigen::Matrix4d tmp;
+//  tmp = SceneGraph::GLCart2T(0, 0, 0, M_PI/2.0, 0, M_PI/2.0);
+//  Sophus::SE3d permutation(tmp);
   Sophus::SE3d permutation;
-  permutation.so3() = calibu::RdfRobotics;
+//  permutation.so3() = calibu::RdfRobotics;
 
 
   /////////////////////////////////////////////////////////////////////////////
@@ -421,6 +426,7 @@ int main(int argc, char** argv)
       current_pose = permutation;
       last_adjusted_pose.t_wp = permutation;
       path_vo_vec.push_back(current_pose);
+      path_ba_vec.push_back(last_adjusted_pose.t_wp);
       path_gt_vec.push_back(permutation * poses[0].inverse() * poses[frame_index]);
 
       // Capture first image.
@@ -441,6 +447,7 @@ int main(int argc, char** argv)
     if (!paused || pangolin::Pushed(step_once)) {
       //  Capture the new image.
       capture_flag = camera.Capture(*images);
+      std::cout << "==================================================" << std::endl;
       std::cout << "Frame#: " << frame_index << std::endl;
 
       if (capture_flag == false) {
@@ -450,7 +457,7 @@ int main(int argc, char** argv)
         cv::Mat current_image = ConvertAndNormalize(images->at(0)->Mat());
         current_timestamp = images->at(0)->Timestamp();
 
-#if DEBUG
+#if DEVIL_DEBUG
         std::cout << "=== Image timestamps is: " << current_timestamp << std::endl;
 #endif
 
@@ -510,7 +517,7 @@ int main(int argc, char** argv)
         dtrack.SetKeyframe(keyframe_image, keyframe_depth);
         double dtrack_error = dtrack.Estimate(current_image, pose_estimate,
                                               pose_covariance, ui_use_pyramid);
-        std::cout << "VO Pose Estimate: " << Sophus::SE3::log(pose_estimate).transpose() << std::endl;
+        std::cout << "VO Pose Estimate[" << frame_index << "]: " << Sophus::SE3::log(pose_estimate).transpose() << std::endl;
         Pose pose;
         pose.Tab        = pose_estimate;
         pose.covariance = pose_covariance;
@@ -527,8 +534,6 @@ int main(int argc, char** argv)
           pose_estimate = gt_relative_pose;
         }
 
-        std::cout << "==================================================" << std::endl;
-
 
         ///--------------------
         /// Windowed BA.
@@ -541,10 +546,14 @@ int main(int argc, char** argv)
           ba::debug_level_threshold = -1;
           bundle_adjuster.Init(options, 10, 1000);
           bundle_adjuster.AddCamera(rig.cameras_[0], rig.t_wc_[0]);
+//          Sophus::SE3d bleh;
+//          bundle_adjuster.AddCamera(rig.cameras_[0], bleh);
 
+#if 0
           Eigen::Matrix<double, 3, 1> gravity;
           gravity << 0, 0, -9.806;
           bundle_adjuster.SetGravity(gravity);
+#endif
 
           // Reset IMU residuals IDs.
           imu_residual_ids.clear();
@@ -557,7 +566,7 @@ int main(int argc, char** argv)
                                             last_adjusted_pose.t_vs,
                                             last_adjusted_pose.cam_params,
                                             last_adjusted_pose.v_w,
-                                            last_adjusted_pose.b, true,
+                                            last_adjusted_pose.b, true, //ba_has_run?false:true,
                                             last_adjusted_pose.time);
 
           Eigen::Matrix6d cov;
@@ -570,21 +579,9 @@ int main(int argc, char** argv)
             global_pose *= pose.Tab;
             cur_id = bundle_adjuster.AddPose(global_pose, true, pose.timeB);
 
-  #if DEBUG
-            std::cout << "GT Rel Pose: " <<
-                  Sophus::SE3::log(poses[ii].inverse() * poses[ii+1]).transpose()
-                          << std::endl;
-
-            std::cout << "VO Rel Pose: " <<
-                  Sophus::SE3::log(pose.Tab).transpose() << std::endl;
-
-            std::cout << "ERROR Rel Pose: " <<
-                  Sophus::SE3::log(pose.Tab.inverse()*poses[ii].inverse()*poses[ii+1]).transpose() << std::endl;
-  #endif
-
 //            bundle_adjuster.AddBinaryConstraint(prev_id, cur_id, pose.Tab, cov);
-            bundle_adjuster.AddBinaryConstraint(prev_id, cur_id, pose.Tab, pose.covariance);
-  //          bundle_adjuster.AddBinaryConstraint(prev_id, cur_id, poses[ii].inverse() * poses[ii+1], cov);
+//            bundle_adjuster.AddBinaryConstraint(prev_id, cur_id, pose.Tab, pose.covariance);
+            bundle_adjuster.AddBinaryConstraint(prev_id, cur_id, poses[ii].inverse() * poses[ii+1], cov);
 
             // Get IMU measurements between frames.
             std::vector<ImuMeasurement> imu_measurements =
@@ -605,8 +602,10 @@ int main(int argc, char** argv)
           ba_has_run = true;
 
           // Pop front and update last adjusted pose.
+          ba::PoseT<double> tmp = bundle_adjuster.GetPose(0);
           last_adjusted_pose = bundle_adjuster.GetPose(1);
           dtrack_map.pop_front();
+          std::cout << "BA Pose Popped[" << path_ba_vec.size() << "]: " << (tmp.t_wp.inverse()*last_adjusted_pose.t_wp).log().transpose() << std::endl;
           path_ba_vec.push_back(last_adjusted_pose.t_wp);
 
 #if 0
@@ -696,7 +695,7 @@ int main(int argc, char** argv)
           global_pose *= pose.Tab;
           cur_id = bundle_adjuster.AddPose(global_pose, true, pose.timeB);
 
-#if DEBUG
+#if DEVIL_DEBUG
           std::cout << "GT Rel Pose: " <<
                 Sophus::SE3::log(poses[ii].inverse() * poses[ii+1]).transpose()
                         << std::endl;
@@ -716,7 +715,7 @@ int main(int argc, char** argv)
           std::vector<ImuMeasurement> imu_measurements =
               imu_buffer.GetRange(pose.timeA, pose.timeB);
 
-#if DEBUG
+#if DEVIL_DEBUG
           std::cout << "Number of IMU measurements between frames: " <<
                        imu_measurements.size() << std::endl;
 #endif

@@ -30,6 +30,8 @@
 #include <HAL/Utils/TicToc.h>
 #include <calibu/cam/CameraRig.h>
 
+#define DTRACK_DEBUG 0
+
 /////////////////////////////////////////////////////////////////////////////
 namespace Eigen {
 #define USING_VECTOR_ARRAY(size)                            \
@@ -725,15 +727,17 @@ class DTrack
             Trl = (Tlr*Sophus::SE3Group<double>::exp(X)).inverse();
 
             if (X.norm() < 1e-5) {
+#if DTRACK_DEBUG
               printf("DTRACK: notice(@L%d I%d) Update is too small. Breaking early!\n",
                      pyramid_lvl+1, num_iters+1);
-
+#endif
               break;
             }
           } else {
+#if DTRACK_DEBUG
             printf("DTRACK: notice(@L%d I%d) Error is increasing. Breaking early!\n",
                    pyramid_lvl+1, num_iters+1);
-
+#endif
             break;
           }
         }
