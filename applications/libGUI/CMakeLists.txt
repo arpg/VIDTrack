@@ -1,9 +1,11 @@
-cmake_minimum_required(VERSION 2.8.10)
-project(libGUI)
+cmake_policy(SET CMP0042 OLD)
 
 find_package(Eigen3 REQUIRED)
 find_package(Pangolin 0.1 REQUIRED)
 find_package(SceneGraph 0.1 REQUIRED)
+
+set(LIBGUI_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/.. PARENT_SCOPE)
+set(LIBGUI_LIBRARIES "libGUI" PARENT_SCOPE)
 
 include_directories(
   ${EIGEN3_INCLUDE_DIR}

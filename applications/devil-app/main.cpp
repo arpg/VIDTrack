@@ -11,13 +11,14 @@
 #include <calibu/Calibu.h>
 #include <calibu/calib/LocalParamSe3.h>
 #include <calibu/calib/CostFunctionAndParams.h>
+
 #include <HAL/Utils/GetPot>
 #include <HAL/Utils/TicToc.h>
 #include <HAL/Camera/CameraDevice.h>
 #include <HAL/IMU/IMUDevice.h>
+
 #include <pangolin/pangolin.h>
 #include <SceneGraph/SceneGraph.h>
-
 #include <libGUI/AnalyticsView.h>
 #include <libGUI/Timer.h>
 #include <libGUI/TimerView.h>
@@ -25,32 +26,12 @@
 #include <libGUI/GLPathAbs.h>
 
 #include "dtrack.h"
+#include <devil/tracker.h>
 
+
+#define DEVIL 0
 #define DEVIL_DEBUG 0
 
-///////////////////////////////////////////////////////////////////////////
-/// Generates a "heat map" based on an error image provided.
-cv::Mat GenerateHeatMap(const cv::Mat& input)
-{
-  cv::Mat output(input.rows, input.cols, CV_8UC3);
-
-  // Get min/max to normalize.
-  double min, max;
-  cv::minMaxIdx(input, &min, &max);
-  const double mean = cv::mean(input).val[0];
-  max = 3*mean;
-  for (int vv = 0; vv < input.rows; ++vv) {
-    for (int uu = 0; uu < input.cols; ++uu) {
-      float n_val = (input.at<float>(vv, uu) - min) / (max - min);
-      if (n_val < 0.5) {
-        output.at<cv::Vec3b>(vv, uu) = cv::Vec3b(255*n_val, 0, 128);
-      } else {
-        output.at<cv::Vec3b>(vv, uu) = cv::Vec3b(255, 0, 128*n_val);
-      }
-    }
-  }
-  return output;
-}
 
 /////////////////////////////////////////////////////////////////////////////
 /// Convert greyscale image to float and normalizes.
@@ -244,7 +225,6 @@ int main(int argc, char** argv)
     old_rig = calibu::ReadXmlRig(cl_args.follow("cameras.xml", "-cmod"));
   }
   Eigen::Matrix3f K = old_rig.cameras[0].camera.K().cast<float>();
-  Eigen::Matrix3f Kinv = K.inverse();
   std::cout << "-- K is: " << std::endl << K << std::endl;
 
   // Convert old rig to new rig.
@@ -348,7 +328,7 @@ int main(int argc, char** argv)
   // Container view handler.
   const char keyShowHide[] = {'1','2','3','4','5','6','7','8','9','0'};
   const char keySave[]     = {'!','@','#','$','%','^','&','*','(',')'};
-  for (int ii = 0; ii < container.NumChildren(); ii++) {
+  for (size_t ii = 0; ii < container.NumChildren(); ii++) {
     pangolin::RegisterKeyPressCallback(keyShowHide[ii], [&container,ii]() {
       container[ii].ToggleShow(); });
     pangolin::RegisterKeyPressCallback(keySave[ii], [&container,ii]() {
@@ -385,6 +365,7 @@ int main(int argc, char** argv)
   Sophus::SE3d permutation;
   permutation.so3() = calibu::RdfRobotics;
 
+  devil::Tracker dvi_track(old_rig);
 
   /////////////////////////////////////////////////////////////////////////////
   ///---- MAIN LOOP

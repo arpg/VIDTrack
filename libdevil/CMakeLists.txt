@@ -1,56 +1,96 @@
-cmake_minimum_required(VERSION 2.8.10)
-project(libDEVIL)
+cmake_policy(SET CMP0042 OLD)
 
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake_modules/")
+include(def_library)
+include(export_package)
 
+set(DEVIL_VERSION_MAJOR 1)
+set(DEVIL_VERSION_MINOR 0)
+set(DEVIL_VERSION ${DEVIL_VERSION_MAJOR}.${DEVIL_VERSION_MINOR})
 
+option(BUILD_SHARED_LIBS "Build Shared Library" ON)
+
+find_package(MINIGLOG REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(Sophus REQUIRED)
 find_package(OpenCV2 REQUIRED)
-find_package(HAL 0.1 REQUIRED)
-find_package(PbMsgs 0.1 REQUIRED)
-find_package(Pangolin 0.1 REQUIRED)
-find_package(SceneGraph 0.1 REQUIRED)
 find_package(Calibu 0.1 REQUIRED)
 find_package(BA REQUIRED)
-find_package(CERES REQUIRED)
 find_package(TBB QUIET)
-find_package(Protobuf QUIET)
-find_package(MINIGLOG QUIET)
 
 if(TBB_FOUND)
     add_definitions(-DHAVE_TBB)
 endif()
 
-include_directories(${EIGEN3_INCLUDE_DIR})
-include_directories(${Sophus_INCLUDE_DIR})
-include_directories(${OpenCV2_INCLUDE_DIR})
-include_directories(${HAL_INCLUDE_DIRS})
-include_directories(${PbMsgs_INCLUDE_DIRS})
-include_directories(${Pangolin_INCLUDE_DIRS})
-include_directories(${SceneGraph_INCLUDE_DIRS})
-include_directories(${Calibu_INCLUDE_DIRS})
-include_directories(${BA_INCLUDE_DIRS})
-include_directories(${CERES_INCLUDE_DIR})
-include_directories(${TBB_INCLUDE_DIRS})
 
-link_directories(${Pangolin_LIBRARY_DIRS})
+#################################################
+# Append all includes.
+list(APPEND DEVIL_INC_DIRS
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/
+    ${MINIGLOG_INCLUDE_DIRS}
+    ${EIGEN3_INCLUDE_DIR}
+    ${Sophus_INCLUDE_DIR}
+    ${OpenCV2_INCLUDE_DIR}
+    ${Calibu_INCLUDE_DIRS}
+    ${BA_INCLUDE_DIRS}
+    ${TBB_INCLUDE_DIRS}
+   )
+
+# Assign variable for local applications.
+set(DEVIL_INCLUDE_DIRS ${DEVIL_INC_DIRS} PARENT_SCOPE)
+
+# Add include directories to library.
+include_directories(${DEVIL_INC_DIRS})
 
 
-list(APPEND HDRS tracker.h)
-list(APPEND SRCS tracker.cpp)
+#################################################
+# Append all library paths.
+list(APPEND DEVIL_LINK_DIRS
+    ${Pangolin_LIBRARY_DIRS}
+   )
 
-add_library(devil ${HDRS} ${SRCS})
 
-target_link_libraries(devil ${OpenCV2_LIBRARIES})
-target_link_libraries(devil ${HAL_LIBRARIES})
-target_link_libraries(devil ${PbMsgs_LIBRARIES})
-target_link_libraries(devil ${Pangolin_LIBRARIES})
-target_link_libraries(devil ${SceneGraph_LIBRARIES})
-target_link_libraries(devil ${Calibu_LIBRARIES})
-target_link_libraries(devil ${BA_LIBRARIES})
-target_link_libraries(devil ${CERES_LIBRARIES})
-target_link_libraries(devil ${PROTOBUF_LIBRARIES})
+#################################################
+# Append all libraries.
+list(APPEND DEVIL_LIBS
+    ${MINIGLOG_LIBRARIES}
+    ${OpenCV2_LIBRARIES}
+    ${Calibu_LIBRARIES}
+    ${BA_LIBRARIES}
+   )
 if(TBB_FOUND)
-  target_link_libraries(devil ${TBB_LIBRARIES})
+  list(APPEND DEVIL_LIBS ${TBB_LIBRARIES})
 endif()
+
+# Assign variable for local applications.
+set(DEVIL_LIBRARIES "devil;${DEVIL_LIBS}" PARENT_SCOPE)
+
+
+#################################################
+# Library headers and sources.
+set(DEVIL_HDRS
+    include/devil/tracker.h
+   )
+
+set(DEVIL_SRCS
+    src/tracker.cpp
+   )
+
+
+#################################################
+# Define library.
+def_library(devil
+  SOURCES ${DEVIL_HDRS} ${DEVIL_SRCS}
+  LINK_LIBS ${DEVIL_LIBS}
+  PACKAGE DEVIL)
+
+
+#################################################
+# Export library to cmake.
+export_package(DEVIL
+  TARGETS devil
+  VERSION ${DEVIL_VERSION}
+  LIBRARY devil
+  LIBRARIES devil
+  INCLUDE_DIRS ${DEVIL_INC_DIRS}
+  LINK_DIRS ${DEVIL_LINK_DIRS}
+  )

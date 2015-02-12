@@ -20,10 +20,7 @@ class TimerView : public pangolin::View
  public:
 
   TimerView():
-      has_new_data_(false),
       is_timer_init_(false),
-      num_display_levels_(2),
-      func_name_width_(0),
       offset_y_(0),
       time_window_size_(10),
       fps_str_(""),
@@ -260,10 +257,7 @@ class TimerView : public pangolin::View
   // Projection matrix
   pangolin::OpenGlMatrix ortho_;
 
-  bool             has_new_data_;
   bool             is_timer_init_;
-  int              num_display_levels_;
-  int              func_name_width_;
   int              offset_y_;
   size_t           time_window_size_;
   std::string      fps_str_;

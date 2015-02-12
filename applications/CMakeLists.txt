@@ -1,2 +1,5 @@
+# Auxiliary library for GUI objects shared for apps.
 add_subdirectory(libGUI)
-add_subdirectory(devil)
+
+# Example applications.
+add_subdirectory(devil-app)

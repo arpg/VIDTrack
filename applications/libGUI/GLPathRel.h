@@ -53,7 +53,7 @@ public:
           Sophus::SE3d&    Pose = m_vPath[ii];
           fPose = Pose.matrix().cast<float>();
           glMultMatrixf( MAT4_COL_MAJOR_DATA( fPose ) );
-          if (ii >= start) {
+          if (static_cast<int>(ii) >= start) {
             glColor3f(1.0,0.0,0.0);
             pangolin::glDrawLine(0,0,0,1,0,0);
             glColor3f(0.0,1.0,0.0);
@@ -119,7 +119,6 @@ public:
 private:
   bool                            m_bDrawLines;
   bool                            m_bDrawAxis;
-  GLuint                          m_nDrawListId;
   unsigned int                    m_nPoseDisplay;
   bool                            m_bInitGLComplete;
   Eigen::Vector4f                 m_fLineColor;
