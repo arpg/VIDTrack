@@ -45,7 +45,6 @@
 
 #include <devil/tracker.h>
 
-#define DEVIL_DEBUG 0
 
 
 /////////////////////////////////////////////////////////////////////////////
@@ -60,16 +59,7 @@ inline cv::Mat ConvertAndNormalize(const cv::Mat& in)
 
 
 /////////////////////////////////////////////////////////////////////////////
-struct DTrackPose {
-  Sophus::SE3d      Tab;
-  Eigen::Matrix6d   covariance;
-  double            timeA;
-  double            timeB;
-};
-
-
-/////////////////////////////////////////////////////////////////////////////
-devil::Tracker                                    dvi_track;
+devil::Tracker                                    dvi_track(5, 4);
 std::mutex                                        imu_mutex;
 
 void IMU_Handler(pb::ImuMsg& IMUdata) {
@@ -79,12 +69,6 @@ void IMU_Handler(pb::ImuMsg& IMUdata) {
   Eigen::Vector3d w(IMUdata.gyro().data(0),
                     IMUdata.gyro().data(1),
                     IMUdata.gyro().data(2));
-
-#if DEVIL_DEBUG
-  std::cout << "=== Adding ->> T: " << IMUdata.system_time()
-            << " A: " << a.transpose() << "  G:"
-            << w.transpose() << std::endl;
-#endif
 
   imu_mutex.lock();
   dvi_track.AddInertialMeasurement(a, w, IMUdata.system_time());
@@ -175,14 +159,6 @@ int main(int argc, char** argv)
 
   // Add grid.
   SceneGraph::GLGrid gl_grid(50, 1);
-#if 0
-  {
-    Sophus::SE3d vision_RDF;
-    Sophus::SO3d& rotation = vision_RDF.so3();
-    rotation = calibu::RdfRobotics.inverse();
-    gl_grid.SetPose(vision_RDF.matrix());
-  }
-#endif
   gl_graph.AddChild(&gl_grid);
 
   pangolin::View view_3d;
@@ -344,7 +320,6 @@ int main(int argc, char** argv)
   ///----- Init general variables.
   unsigned int                      frame_index;
   Sophus::SE3d                      current_pose;
-  Sophus::SE3d                      pose_estimate;
   double                            current_timestamp;
   double                            keyframe_timestamp;
 
@@ -352,7 +327,6 @@ int main(int argc, char** argv)
   std::shared_ptr<pb::ImageArray> images = pb::ImageArray::Create();
 
   // Permutation matrix to bring things into robotic reference frame.
-//  Sophus::SE3d permutation = rig.t_wc_[0].inverse();
   Sophus::SE3d permutation;
   permutation.so3() = calibu::RdfRobotics;
 
@@ -416,38 +390,21 @@ int main(int argc, char** argv)
         cv::Mat current_image = ConvertAndNormalize(images->at(0)->Mat());
         current_timestamp = images->at(0)->Timestamp();
 
-#if DEVIL_DEBUG
-        std::cout << "=== Image timestamps is: " << current_timestamp << std::endl;
-#endif
-
         // Get pose for this image.
         timer.Tic("DEVIL");
         dvi_track.Estimate(current_image, images->at(1)->Mat(),
                            current_timestamp, current_pose);
         timer.Toc("DEVIL");
 
-#if 0
-          ///----- Update GUI objects.
-          const size_t dtrack_map_size = dtrack_map.size();
-          for (size_t ii = 0; ii < ui_ba_window_size; ++ii) {
-            ba::PoseT<double> pose = bundle_adjuster.GetPose(ii);
-            path_ba_vec[dtrack_map_size-ui_ba_window_size+ii] = pose.t_wp;
-          }
-
-          // Update error.
-          ba::PoseT<double> pose = bundle_adjuster.GetPose(frame_index-1);
-          Sophus::SE3d gt_pose = permutation * (poses[0].inverse() * poses[frame_index-1]);
-          analytics["BA Path Error"] =
-              Sophus::SE3::log(pose.t_wp.inverse() * gt_pose).head(3).norm();
-
-          // Update analytics.
-          analytics_view.Update(analytics);
-#endif
 
         ///----- Update GUI objects.
         // Update poses.
         Sophus::SE3d gt_pose = permutation *
                           (poses[0].inverse() * poses[frame_index]);
+
+        std::cout << "GT Pose: " << Sophus::SE3::log(poses[0].inverse() * poses[frame_index]).transpose() << std::endl;
+        std::cout << "GT Rel Pose: " << Sophus::SE3::log(poses[frame_index-1].inverse() * poses[frame_index]).transpose() << std::endl;
+        std::cout << "Pose Error: " << Sophus::SE3::log(current_pose.inverse() * gt_pose).head(3).transpose() << std::endl;
 
         // Update error.
         analytics["Path Error"] =

@@ -131,8 +131,9 @@ void Tracker::Estimate(
   /// If BA has converged, integrate IMU measurements (if available) instead
   /// of doing full pyramid.
   bool use_pyramid = true;
-  if (ba_has_converged_) {
+  if (ba_has_converged_ && false) {
     // Get IMU measurements between keyframe and current frame.
+    CHECK_LT(current_time_, time);
     std::vector<ImuMeasurement> imu_measurements =
         imu_buffer_.GetRange(current_time_, time);
 
@@ -141,18 +142,21 @@ void Tracker::Estimate(
                       current_time_ << " and " << time;
       LOG(WARNING) << "Doing full pyramid visual only estimation instead.";
     } else {
-      std::vector<ba::ImuPoseT<double>> imu_poses;
+      std::vector<ba::ImuPoseT<double> > imu_poses;
 
       ba::PoseT<double> last_adjusted_pose =
-          bundle_adjuster_.GetPose(bundle_adjuster_.GetNumPoses() - 1);
+          bundle_adjuster_.GetPose(bundle_adjuster_.GetNumPoses()-1);
 
       ba::ImuPoseT<double> new_pose =
-          decltype(bundle_adjuster_)::ImuResidual::IntegrateResidual(last_adjusted_pose,
-                                                                     imu_measurements, last_adjusted_pose.b.head<3>(), last_adjusted_pose.b.tail<3>(),
-                                                                     bundle_adjuster_.GetImuCalibration().g_vec, imu_poses);
+          decltype(bundle_adjuster_)::ImuResidual::IntegrateResidual(
+            last_adjusted_pose, imu_measurements,
+            last_adjusted_pose.b.head<3>(), last_adjusted_pose.b.tail<3>(),
+            bundle_adjuster_.GetImuCalibration().g_vec, imu_poses);
 
       // Get new relative transform to seed ESM.
       rel_pose_estimate = last_adjusted_pose.t_wp.inverse() * new_pose.t_wp;
+
+      std::cout << "Integrated Pose: " << rel_pose_estimate.log().transpose() << std::endl;
 
       // Convert pose estimate from robotics frame to vision.
 //      rel_pose_estimate = Trv_.inverse() * rel_pose_estimate * Trv_;
@@ -176,9 +180,6 @@ void Tracker::Estimate(
     dtrack_error = dtrack_.Estimate(grey_image, rel_pose_estimate,
                                     dtrack_covariance_, false);
   }
-
-  // Convert DTrack relative pose estimate from vision to robotics frame.
-  rel_pose_estimate = Trv_ * rel_pose_estimate * Trv_.inverse();
 
   // Push pose estimate into DTrack window.
   DTrackPose dtrack_rel_pose;
@@ -211,7 +212,7 @@ void Tracker::Estimate(
 
       // Push first pose and keep track of ID.
       int cur_id, prev_id;
-      prev_id = bundle_adjuster_.AddPose(global_pose, true,
+      prev_id = bundle_adjuster_.AddPose(Trv_*global_pose, true,
                                          dtrack_window_[0].time_a);
 
       // Push rest of DTrack binary constraints.
@@ -219,7 +220,8 @@ void Tracker::Estimate(
         DTrackPose& dtrack_rel_pose = dtrack_window_[ii];
         global_pose *= dtrack_rel_pose.T_ab;
 
-        cur_id = bundle_adjuster_.AddPose(global_pose, true, dtrack_rel_pose.time_b);
+        cur_id = bundle_adjuster_.AddPose(Trv_*global_pose, true,
+                                          dtrack_rel_pose.time_b);
 
         bundle_adjuster_.AddBinaryConstraint(prev_id, cur_id,
                                              dtrack_rel_pose.T_ab,
@@ -283,9 +285,13 @@ void Tracker::Estimate(
 
       // Create new pose and add to BA.
       ba::PoseT<double>& last_adjusted_pose = ba_window_.back();
-      CHECK_EQ(kWindowSize,dtrack_window_.size());
+      CHECK_EQ(kWindowSize, dtrack_window_.size());
       DTrackPose& dtrack_rel_pose = dtrack_window_[kWindowSize-1];
-      Sophus::SE3d global_pose = last_adjusted_pose.t_wp * dtrack_rel_pose.T_ab;
+      Sophus::SE3d global_pose = last_adjusted_pose.t_wp * Trv_ * dtrack_rel_pose.T_ab * Trv_.inverse();
+      Sophus::SE3d global_pose2 = last_adjusted_pose.t_wp * Trv_ * dtrack_rel_pose.T_ab;
+
+      std::cout << "Adjusted Pose: " << Sophus::SE3::log(global_pose).transpose() << std::endl;
+      std::cout << "Adjusted Pose: " << Sophus::SE3::log(global_pose2).transpose() << std::endl;
 
       cur_id = bundle_adjuster_.AddPose(global_pose, true, dtrack_rel_pose.time_b);
 
@@ -323,6 +329,13 @@ void Tracker::Estimate(
             bundle_adjuster_.GetPose(bundle_adjuster_.GetNumPoses() - 1));
     }
 
+    ba::PoseT<double>& last_adjusted_pose = ba_window_.back();
+    std::cout << "IMU-Camera Transform: " <<
+                 last_adjusted_pose.t_vs.log().transpose() << std::endl;
+
+    std::cout << "Last Adjusted Pose: " <<
+                 last_adjusted_pose.t_wp.log().transpose() << std::endl;
+
 
     // Pop first elements of each queue
     dtrack_window_.pop_front();
@@ -332,6 +345,9 @@ void Tracker::Estimate(
   // If BA has not converged yet, return visual only global pose.
   // Otherwise, return BA's adjusted pose.
   if (ba_has_converged_ == false) {
+    // Convert DTrack relative pose estimate from vision to robotics frame.
+    rel_pose_estimate = Trv_ * rel_pose_estimate * Trv_.inverse();
+
     current_pose_ *= rel_pose_estimate;
   } else {
     CHECK_EQ(bundle_adjuster_.GetNumPoses(), kWindowSize+1);
@@ -339,9 +355,6 @@ void Tracker::Estimate(
         bundle_adjuster_.GetPose(bundle_adjuster_.GetNumPoses() - 1);
     current_pose_ = last_adjusted_pose.t_wp;
   }
-
-  std::cout << "Current Pose Estimate: " <<
-               current_pose_.log().transpose() << std::endl;
 
   // Update time.
   current_time_ = time;

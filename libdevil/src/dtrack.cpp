@@ -418,6 +418,9 @@ double DTrack::Estimate(
     vec_max_iterations = {3, 0, 0, 0};
   }
 
+  CHECK_EQ(vec_full_estimate.size(), kPyramidLevels);
+  CHECK_EQ(vec_max_iterations.size(), kPyramidLevels);
+
   // Build live pyramid.
   cv::buildPyramid(live_grey, live_grey_pyramid_, kPyramidLevels);
 
