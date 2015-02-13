@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014  Juan M. Falquez,
+ * Copyright (c) 2015  Juan M. Falquez,
  *                     University of Colorado - Boulder
  *
  *
@@ -533,11 +533,6 @@ class DTrack
           squared_error        = pose_ref.error;
           number_observations  = pose_ref.num_obs;
 
-          // Get covariance.
-          if (pyramid_lvl == 0 && num_iters == 0) {
-            covariance = pose_ref.hessian.inverse();
-          }
-
 #else
           // Iterate through depth map.
           for (int row = 0; row < ref_depth_img.rows; ++row) {
@@ -726,6 +721,11 @@ class DTrack
             // Update Trl.
             Trl = (Tlr*Sophus::SE3Group<double>::exp(X)).inverse();
 
+            // Store hessian.
+            if (pyramid_lvl == 0) {
+              hessian = pose_ref.hessian;
+            }
+
             if (X.norm() < 1e-5) {
 #if DTRACK_DEBUG
               printf("DTRACK: notice(@L%d I%d) Update is too small. Breaking early!\n",
@@ -742,6 +742,9 @@ class DTrack
           }
         }
       }
+
+      // Set covariance output.
+      covariance = hessian.inverse();
 
       return last_error;
     }

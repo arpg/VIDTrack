@@ -1,3 +1,21 @@
+/*
+ * Copyright (c) 2015  Juan M. Falquez,
+ *                     University of Colorado - Boulder
+ *
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include <unistd.h>
 #include <deque>
 
@@ -25,11 +43,8 @@
 #include <libGUI/GLPathRel.h>
 #include <libGUI/GLPathAbs.h>
 
-#include "dtrack.h"
 #include <devil/tracker.h>
 
-
-#define DEVIL 0
 #define DEVIL_DEBUG 0
 
 
@@ -54,8 +69,7 @@ struct DTrackPose {
 
 
 /////////////////////////////////////////////////////////////////////////////
-typedef ba::ImuMeasurementT<double>               ImuMeasurement;
-ba::InterpolationBufferT<ImuMeasurement, double>  imu_buffer;
+devil::Tracker                                    dvi_track;
 std::mutex                                        imu_mutex;
 
 void IMU_Handler(pb::ImuMsg& IMUdata) {
@@ -72,9 +86,8 @@ void IMU_Handler(pb::ImuMsg& IMUdata) {
             << w.transpose() << std::endl;
 #endif
 
-  ImuMeasurement imu(w, a, IMUdata.system_time());
   imu_mutex.lock();
-  imu_buffer.AddElement(imu);
+  dvi_track.AddInertialMeasurement(a, w, IMUdata.system_time());
   imu_mutex.unlock();
 }
 
@@ -118,14 +131,6 @@ int main(int argc, char** argv)
   pangolin::CreatePanel("ui").SetBounds(0, 1, 0, pangolin::Attach::Pix(panel_size));
   pangolin::Var<bool>           ui_camera_follow("ui.Camera Follow", false, true);
   pangolin::Var<bool>           ui_reset("ui.Reset", true, false);
-  pangolin::Var<bool>           ui_use_gt_depth("ui.Use GT Depth", true, true);
-  pangolin::Var<bool>           ui_use_gt_poses("ui.Use GT Poses", false, true);
-  pangolin::Var<bool>           ui_use_constant_velocity("ui.Use Const Vel Model", false, true);
-  pangolin::Var<bool>           ui_use_imu_estimates("ui.Use IMU Estimates", false, true);
-  pangolin::Var<bool>           ui_use_pyramid("ui.Use Pyramid", true, true);
-  pangolin::Var<bool>           ui_windowed_ba("ui.Windowed BA", true, true);
-  pangolin::Var<unsigned int>   ui_ba_window_size("ui.BA Window Size", 5, 0, 20);
-  pangolin::Var<bool>           ui_show_vo_path("ui.Show VO Path", true, true);
   pangolin::Var<bool>           ui_show_ba_path("ui.Show BA Path", true, true);
   pangolin::Var<bool>           ui_show_gt_path("ui.Show GT Path", true, true);
 
@@ -157,18 +162,14 @@ int main(int argc, char** argv)
   glClearColor(0, 0, 0, 1);
 
   // Add path.
-  GLPathRel gl_path_vo;
   GLPathAbs gl_path_ba;
   GLPathAbs gl_path_gt;
-  gl_path_vo.SetPoseDisplay(5);
   gl_path_ba.SetPoseDisplay(5);
   gl_path_gt.SetPoseDisplay(5);
   gl_path_ba.SetLineColor(0, 1.0, 0);
   gl_path_gt.SetLineColor(0, 0, 1.0);
-  gl_graph.AddChild(&gl_path_vo);
   gl_graph.AddChild(&gl_path_ba);
   gl_graph.AddChild(&gl_path_gt);
-  std::vector<Sophus::SE3d>& path_vo_vec = gl_path_vo.GetPathRef();
   std::vector<Sophus::SE3d>& path_ba_vec = gl_path_ba.GetPathRef();
   std::vector<Sophus::SE3d>& path_gt_vec = gl_path_gt.GetPathRef();
 
@@ -185,11 +186,9 @@ int main(int argc, char** argv)
   gl_graph.AddChild(&gl_grid);
 
   pangolin::View view_3d;
-  const double far = 10*1000;
-  const double near = 1E-3;
 
   pangolin::OpenGlRenderState stacks3d(
-        pangolin::ProjectionMatrix(640, 480, 420, 420, 320, 240, near, far),
+        pangolin::ProjectionMatrix(640, 480, 420, 420, 320, 240, 1E-3, 10*1000),
         pangolin::ModelViewLookAt(-5, 0, -8, 0, 0, 0, pangolin::AxisNegZ)
         );
 
@@ -231,17 +230,13 @@ int main(int argc, char** argv)
   calibu::Rig<double> rig;
   calibu::CreateFromOldRig(&old_rig, &rig);
 
-  ///----- Init DTrack stuff.
+  ///----- DTrack aux variables.
   cv::Mat keyframe_image, keyframe_depth;
-  DTrack dtrack;
-  dtrack.Init();
-  dtrack.SetParams(old_rig.cameras[0].camera, old_rig.cameras[0].camera,
-      old_rig.cameras[0].camera, Sophus::SE3d());
 
-  ///----- Init BA stuff.
+
+  ///----- BA aux variables.
   std::vector<uint32_t>                             imu_residual_ids;
-  ba::BundleAdjuster<double, 0, 9, 0>               bundle_adjuster;
-  ba::Options<double>                               options;
+
 
   ///----- Load file of ground truth poses (required).
   std::vector<Sophus::SE3d> poses;
@@ -348,14 +343,10 @@ int main(int argc, char** argv)
 
   ///----- Init general variables.
   unsigned int                      frame_index;
-  std::deque<DTrackPose>            dtrack_map;
-  std::deque<ba::PoseT<double> >    ba_map;
   Sophus::SE3d                      current_pose;
   Sophus::SE3d                      pose_estimate;
-  Eigen::Matrix6d                   pose_covariance;
   double                            current_timestamp;
   double                            keyframe_timestamp;
-  bool                              ba_has_run;
 
   // Image holder.
   std::shared_ptr<pb::ImageArray> images = pb::ImageArray::Create();
@@ -365,7 +356,6 @@ int main(int argc, char** argv)
   Sophus::SE3d permutation;
   permutation.so3() = calibu::RdfRobotics;
 
-  devil::Tracker dvi_track(old_rig);
 
   /////////////////////////////////////////////////////////////////////////////
   ///---- MAIN LOOP
@@ -382,29 +372,15 @@ int main(int argc, char** argv)
       analytics_view.InitReset();
 
       // Reset GUI path.
-      path_vo_vec.clear();
       path_ba_vec.clear();
       path_gt_vec.clear();
-
-      // Re-initialize camera.
-      if (!camera.GetDeviceProperty(hal::DeviceDirectory).empty()) {
-//       camera = hal::Camera(cl_args.follow("", "-cam"));
-      }
 
       // Reset frame counter.
       frame_index = 0;
 
-      // Reset BA flag.
-      ba_has_run = false;
-
       // Reset map and current pose.
-      dtrack_map.clear();
-      ba_map.clear();
-      ba_map.resize(ui_ba_window_size+1);
       current_pose = permutation;
-      ba_map[0].t_wp = permutation;
-      path_vo_vec.push_back(current_pose);
-      path_ba_vec.push_back(ba_map[0].t_wp);
+      path_ba_vec.push_back(current_pose);
       path_gt_vec.push_back(permutation * poses[0].inverse() * poses[frame_index]);
 
       // Capture first image.
@@ -415,6 +391,11 @@ int main(int argc, char** argv)
       keyframe_image = current_image;
       keyframe_depth = images->at(1)->Mat();
       keyframe_timestamp = images->at(0)->Timestamp();
+
+      // Init DEVIL.
+      dvi_track.ConfigureBA(old_rig);
+      dvi_track.ConfigureDTrack(keyframe_image, keyframe_depth,
+                                keyframe_timestamp, old_rig.cameras[0].camera);
 
       // Increment frame counter.
       frame_index++;
@@ -440,153 +421,10 @@ int main(int argc, char** argv)
 #endif
 
         // Get pose for this image.
-        timer.Tic("DTrack");
-
-        // Reset pose estimate to identity if no constant velocity model is used.
-        if (!ui_use_constant_velocity) {
-          pose_estimate = Sophus::SE3d();
-        }
-
-
-        ///--------------------
-        /// Integrate IMU to get an initial pose estimate to seed VO.
-        if (ui_use_imu_estimates) {
-          if (ba_has_run == false) {
-            std::cerr << "- BA has to be run at least once before seeding with "
-                      << "IMU estimates!" << std::endl;
-          } else {
-
-            // Get IMU measurements between previous frame and current frame.
-            std::vector<ImuMeasurement> imu_measurements =
-                imu_buffer.GetRange(keyframe_timestamp, current_timestamp);
-
-            if (imu_measurements.size() == 0) {
-              std::cerr << "Could not find imu measurements between : " <<
-                           keyframe_timestamp << " and " <<
-                           current_timestamp << std::endl;
-              exit(EXIT_FAILURE);
-            }
-
-            std::vector<ba::ImuPoseT<double>> imu_poses;
-
-            ba::PoseT<double> last_pose =
-                bundle_adjuster.GetPose(bundle_adjuster.GetNumPoses() - 1);
-
-            ba::ImuPoseT<double> new_pose =
-                decltype(bundle_adjuster)::ImuResidual::IntegrateResidual(last_pose,
-                imu_measurements, last_pose.b.head<3>(), last_pose.b.tail<3>(),
-                bundle_adjuster.GetImuCalibration().g_vec, imu_poses);
-
-            // Get new relative transform to seed ESM.
-            pose_estimate = last_pose.t_wp.inverse() * new_pose.t_wp;
-
-#if DTRACK_DEBUG
-            Sophus::SE3d real_pose_transform;
-            real_pose_transform = last_pose.t_wp.inverse() * new_pose.t_wp;
-            std::cout << "Real Pose Transform: " <<
-                  Sophus::SE3::log(poses[frame_index-1].inverse() * poses[frame_index]).transpose()
-                          << std::endl;
-
-            std::cout << "Integrated Pose: " <<
-                         Sophus::SE3::log(real_pose_transform).transpose() << std::endl;
-#endif
-          }
-        }
-
-
-        ///--------------------
-        /// RGBD pose estimation.
-        dtrack.SetKeyframe(keyframe_image, keyframe_depth);
-        double dtrack_error = dtrack.Estimate(current_image, pose_estimate,
-                                              pose_covariance, ui_use_pyramid);
-        std::cout << "VO Pose Estimate[" << frame_index << "]: " << Sophus::SE3::log(pose_estimate).transpose() << std::endl;
-        DTrackPose pose;
-        pose.Tab        = pose_estimate;
-        pose.covariance = pose_covariance;
-        pose.timeA      = keyframe_timestamp;
-        pose.timeB      = current_timestamp;
-        dtrack_map.push_back(pose);
-        analytics["DTrack RMS"] = dtrack_error;
-        timer.Toc("DTrack");
-
-        // If using ground-truth poses, override pose estimate with GT pose.
-        if (ui_use_gt_poses) {
-          Sophus::SE3d gt_relative_pose = poses[frame_index-1].inverse()
-              * poses[frame_index];
-          pose_estimate = gt_relative_pose;
-        }
-
-
-        ///--------------------
-        /// Windowed BA.
-        if (ui_windowed_ba == true && frame_index > ui_ba_window_size) {
-          // Init BA.
-          options.regularize_biases_in_batch  = true;
-          options.use_triangular_matrices = false;
-          options.use_sparse_solver = false;
-          options.use_dogleg = true;
-          ba::debug_level_threshold = -1;
-          bundle_adjuster.Init(options, 10, 1000);
-          bundle_adjuster.AddCamera(rig.cameras_[0], rig.t_wc_[0]);
-
-#if 0
-          Eigen::Matrix<double, 3, 1> gravity;
-          gravity << 0, 0, -9.806;
-          bundle_adjuster.SetGravity(gravity);
-#endif
-
-          // Reset IMU residuals IDs.
-          imu_residual_ids.clear();
-
-          // Push last adjusted pose.
-          int cur_id, prev_id;
-          ba::PoseT<double>& front_adjusted_pose = ba_map.front();
-          Sophus::SE3d global_pose = front_adjusted_pose.t_wp;
-          prev_id = bundle_adjuster.AddPose(front_adjusted_pose.t_wp,
-                                            front_adjusted_pose.t_vs,
-                                            front_adjusted_pose.cam_params,
-                                            front_adjusted_pose.v_w,
-                                            front_adjusted_pose.b, true,
-                                            front_adjusted_pose.time);
-
-          Eigen::Matrix6d cov;
-          cov.setIdentity();
-          cov *= 1e-6;
-
-          // Push rest of poses.
-          for (size_t ii = 0; ii < dtrack_map.size(); ++ii) {
-            DTrackPose& pose = dtrack_map[ii];
-            global_pose *= pose.Tab;
-            cur_id = bundle_adjuster.AddPose(global_pose, true, pose.timeB);
-
-//            bundle_adjuster.AddBinaryConstraint(prev_id, cur_id, pose.Tab, cov);
-            bundle_adjuster.AddBinaryConstraint(prev_id, cur_id, pose.Tab, pose.covariance);
-//            bundle_adjuster.AddBinaryConstraint(prev_id, cur_id, poses[ii].inverse() * poses[ii+1], cov);
-
-            // Get IMU measurements between frames.
-            std::vector<ImuMeasurement> imu_measurements =
-                imu_buffer.GetRange(pose.timeA, pose.timeB);
-
-            // Add IMU constraints.
-            imu_residual_ids.push_back(
-                  bundle_adjuster.AddImuResidual(prev_id, cur_id, imu_measurements));
-
-            // Update pose IDs.
-            prev_id = cur_id;
-          }
-
-          // Run solver.
-          bundle_adjuster.Solve(1000, 1.0);
-
-          // Reset flag.
-          ba_has_run = true;
-
-          // Pop front and update last adjusted pose.
-          ba::PoseT<double> tmp = bundle_adjuster.GetPose(0);
-          front_adjusted_pose = bundle_adjuster.GetPose(1);
-          dtrack_map.pop_front();
-          std::cout << "BA Pose Popped[" << path_ba_vec.size() << "]: " << (tmp.t_wp.inverse()*front_adjusted_pose.t_wp).log().transpose() << std::endl;
-          path_ba_vec.push_back(front_adjusted_pose.t_wp);
+        timer.Tic("DEVIL");
+        dvi_track.Estimate(current_image, images->at(1)->Mat(),
+                           current_timestamp, current_pose);
+        timer.Toc("DEVIL");
 
 #if 0
           ///----- Update GUI objects.
@@ -605,14 +443,11 @@ int main(int argc, char** argv)
           // Update analytics.
           analytics_view.Update(analytics);
 #endif
-        }
-
 
         ///----- Update GUI objects.
         // Update poses.
         Sophus::SE3d gt_pose = permutation *
                           (poses[0].inverse() * poses[frame_index]);
-        current_pose = current_pose * pose_estimate;
 
         // Update error.
         analytics["Path Error"] =
@@ -624,7 +459,7 @@ int main(int argc, char** argv)
         keyframe_timestamp = current_timestamp;
 
         // Update path.
-        path_vo_vec.push_back(pose_estimate);
+        path_ba_vec.push_back(current_pose);
         path_gt_vec.push_back(permutation*poses[0].inverse()*poses[frame_index]);
 
         // Update analytics.
@@ -634,104 +469,6 @@ int main(int argc, char** argv)
         frame_index++;
       }
     }
-
-    ///----- Run Batch BA ...
-    if (pangolin::Pushed(run_batch_ba)) {
-
-        // Init BA.
-        options.regularize_biases_in_batch  = true;
-        options.use_triangular_matrices = false;
-        options.use_sparse_solver = false;
-        options.use_dogleg = true;
-        //ba::debug_level_threshold = 1;
-        bundle_adjuster.Init(options, 200, 2000);
-        bundle_adjuster.AddCamera(rig.cameras_[0], rig.t_wc_[0]);
-
-        Eigen::Matrix<double, 3, 1> gravity;
-        gravity << 0, 0, -9.806;
-        bundle_adjuster.SetGravity(gravity);
-
-        // Reset IMU residuals IDs.
-        imu_residual_ids.clear();
-
-        // Push first pose.
-        Sophus::SE3d global_pose;
-        {
-          Sophus::SO3d& rot = global_pose.so3();
-          rot = calibu::RdfRobotics;
-        }
-
-        int cur_id, prev_id;
-        prev_id = bundle_adjuster.AddPose(global_pose, true, 0);
-
-        Eigen::Matrix6d cov;
-        cov.setIdentity();
-        cov *= 1e-6;
-
-        // Push rest of poses.
-        std::cout << "DTrack Map Size: " << dtrack_map.size() << std::endl;
-        for (size_t ii = 0; ii < dtrack_map.size(); ++ii) {
-          DTrackPose& pose = dtrack_map[ii];
-          global_pose *= pose.Tab;
-          cur_id = bundle_adjuster.AddPose(global_pose, true, pose.timeB);
-
-#if DEVIL_DEBUG
-          std::cout << "GT Rel Pose: " <<
-                Sophus::SE3::log(poses[ii].inverse() * poses[ii+1]).transpose()
-                        << std::endl;
-
-          std::cout << "VO Rel Pose: " <<
-                Sophus::SE3::log(pose.Tab).transpose() << std::endl;
-
-          std::cout << "ERROR Rel Pose: " <<
-                Sophus::SE3::log(pose.Tab.inverse()*poses[ii].inverse()*poses[ii+1]).transpose() << std::endl;
-#endif
-
-//          bundle_adjuster.AddBinaryConstraint(prev_id, cur_id, pose.Tab, cov);
-          bundle_adjuster.AddBinaryConstraint(prev_id, cur_id, pose.Tab, pose.covariance);
-//          bundle_adjuster.AddBinaryConstraint(prev_id, cur_id, poses[ii].inverse() * poses[ii+1], cov);
-
-          // Get IMU measurements between frames.
-          std::vector<ImuMeasurement> imu_measurements =
-              imu_buffer.GetRange(pose.timeA, pose.timeB);
-
-#if DEVIL_DEBUG
-          std::cout << "Number of IMU measurements between frames: " <<
-                       imu_measurements.size() << std::endl;
-#endif
-
-          // Add IMU constraints.
-          imu_residual_ids.push_back(
-                bundle_adjuster.AddImuResidual(prev_id, cur_id, imu_measurements));
-
-          // Update pose IDs.
-          prev_id = cur_id;
-      }
-
-      // Run solver.
-      bundle_adjuster.Solve(1000, 1.0);
-
-      // Reset flag.
-      ba_has_run = true;
-
-      ///----- Update GUI objects.
-      path_ba_vec.clear();
-      for (size_t ii = 0; ii < frame_index; ++ii) {
-        ba::PoseT<double> pose = bundle_adjuster.GetPose(ii);
-        path_ba_vec.push_back(pose.t_wp);
-      }
-
-
-      // Update error.
-      ba::PoseT<double> pose = bundle_adjuster.GetPose(frame_index-1);
-      Sophus::SE3d gt_pose = permutation * (poses[0].inverse() * poses[frame_index-1]);
-      analytics["BA Path Error"] =
-          Sophus::SE3::log(pose.t_wp.inverse() * gt_pose).head(3).norm();
-
-      // Update analytics.
-      analytics_view.Update(analytics);
-    }
-
 
 
     /////////////////////////////////////////////////////////////////////////////
@@ -750,11 +487,11 @@ int main(int argc, char** argv)
       stacks3d.Follow(current_pose.matrix());
     }
 
-    gl_path_vo.SetVisible(ui_show_vo_path);
     gl_path_ba.SetVisible(ui_show_ba_path);
     gl_path_gt.SetVisible(ui_show_gt_path);
 
 
+#if 0
     // Update path using NIMA's code.
     {
       view_3d.ActivateAndScissor(stacks3d);
@@ -787,6 +524,7 @@ int main(int argc, char** argv)
         }
       }
     }
+#endif
 
     // Sleep a bit.
     usleep(1e6/60.0);

@@ -68,10 +68,12 @@ set(DEVIL_LIBRARIES "devil;${DEVIL_LIBS}" PARENT_SCOPE)
 #################################################
 # Library headers and sources.
 set(DEVIL_HDRS
+    include/devil/dtrack.h
     include/devil/tracker.h
    )
 
 set(DEVIL_SRCS
+    src/dtrack.cpp
     src/tracker.cpp
    )
 
