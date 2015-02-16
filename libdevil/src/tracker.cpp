@@ -36,6 +36,8 @@ Tracker::~Tracker()
 {
 }
 
+
+///////////////////////////////////////////////////////////////////////////
 void Tracker::ConfigureDTrack(
     const cv::Mat&                            keyframe_grey,
     const cv::Mat&                            keyframe_depth,
@@ -66,9 +68,6 @@ void Tracker::ConfigureDTrack(
     dtrack_.SetKeyframe(keyframe_grey, keyframe_depth);
     current_time_ = time;
     config_dtrack_ = true;
-
-    // Set up robotic to vision permuation matrix.
-    Trv_.so3() = calibu::RdfRobotics;
   }
 }
 
@@ -97,13 +96,23 @@ void Tracker::ConfigureBA(const calibu::CameraRig& rig,
     // Standardize camera rig and IMU-Camera transform.
     rig_ = calibu::ToCoordinateConvention(rig, calibu::RdfRobotics);
 
-    Sophus::SE3d M_rv;
-    M_rv.so3() = calibu::RdfRobotics;
-    for (calibu::CameraModelAndTransform& model : rig_.cameras) {
-      model.T_wc = model.T_wc*M_rv;
-    }
+    // Set up robotic to vision permuation matrix.
+    Sophus::SE3d Trv;
+    Trv.so3() = calibu::RdfRobotics;
 
-    LOG(INFO) << "Starting Tic:" << std::endl << rig_.cameras[0].T_wc.matrix();
+    // Tic holds IMU-Camera transform. It is used to convert camera poses from
+    // vision to robotics, and then applies the transform of camera with
+    // respect to IMU -- thus bringing poses to IMU reference frame, required
+    // by BA. NOTE: When using Vicalib, IMU is "world" origin.
+    Tic_ = rig_.cameras[0].T_wc * Trv;
+    LOG(INFO) << "Twc:" << std::endl << rig_.cameras[0].T_wc.matrix();
+    LOG(INFO) << "Tic:" << std::endl << Tic_.matrix();
+
+    // Transform offiially all cameras in rig. This is done for compatibility,
+    // in case actual reprojection residuals are used.
+    for (calibu::CameraModelAndTransform& model : rig_.cameras) {
+      model.T_wc = model.T_wc * Trv;
+    }
 
     // Set up BA options.
     options_ = options;
@@ -189,6 +198,8 @@ void Tracker::Estimate(
   dtrack_rel_pose.time_b      = time;
   dtrack_window_.push_back(dtrack_rel_pose);
 
+  std::cout << "VO Pose Estimate: " << Sophus::SE3::log(rel_pose_estimate).transpose() << std::endl;
+
   // Set current frame as new keyframe.
   dtrack_.SetKeyframe(grey_image, depth_image);
 
@@ -212,7 +223,7 @@ void Tracker::Estimate(
 
       // Push first pose and keep track of ID.
       int cur_id, prev_id;
-      prev_id = bundle_adjuster_.AddPose(Trv_*global_pose, true,
+      prev_id = bundle_adjuster_.AddPose(Tic_*global_pose, true,
                                          dtrack_window_[0].time_a);
 
       // Push rest of DTrack binary constraints.
@@ -220,7 +231,7 @@ void Tracker::Estimate(
         DTrackPose& dtrack_rel_pose = dtrack_window_[ii];
         global_pose *= dtrack_rel_pose.T_ab;
 
-        cur_id = bundle_adjuster_.AddPose(Trv_*global_pose, true,
+        cur_id = bundle_adjuster_.AddPose(Tic_*global_pose, true,
                                           dtrack_rel_pose.time_b);
 
         bundle_adjuster_.AddBinaryConstraint(prev_id, cur_id,
@@ -287,8 +298,8 @@ void Tracker::Estimate(
       ba::PoseT<double>& last_adjusted_pose = ba_window_.back();
       CHECK_EQ(kWindowSize, dtrack_window_.size());
       DTrackPose& dtrack_rel_pose = dtrack_window_[kWindowSize-1];
-      Sophus::SE3d global_pose = last_adjusted_pose.t_wp * Trv_ * dtrack_rel_pose.T_ab * Trv_.inverse();
-      Sophus::SE3d global_pose2 = last_adjusted_pose.t_wp * Trv_ * dtrack_rel_pose.T_ab;
+      Sophus::SE3d global_pose = last_adjusted_pose.t_wp * Tic_ * dtrack_rel_pose.T_ab * Tic_.inverse();
+      Sophus::SE3d global_pose2 = last_adjusted_pose.t_wp * Tic_ * dtrack_rel_pose.T_ab;
 
       std::cout << "Adjusted Pose: " << Sophus::SE3::log(global_pose).transpose() << std::endl;
       std::cout << "Adjusted Pose: " << Sophus::SE3::log(global_pose2).transpose() << std::endl;
@@ -346,7 +357,7 @@ void Tracker::Estimate(
   // Otherwise, return BA's adjusted pose.
   if (ba_has_converged_ == false) {
     // Convert DTrack relative pose estimate from vision to robotics frame.
-    rel_pose_estimate = Trv_ * rel_pose_estimate * Trv_.inverse();
+    rel_pose_estimate = Tic_ * rel_pose_estimate * Tic_.inverse();
 
     current_pose_ *= rel_pose_estimate;
   } else {
@@ -374,6 +385,3 @@ void Tracker::AddInertialMeasurement(
   ImuMeasurement imu(gyro, accel, time);
   imu_buffer_.AddElement(imu);
 }
-
-
-
