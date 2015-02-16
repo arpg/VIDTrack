@@ -448,16 +448,20 @@ int main(int argc, char** argv)
     gl_path_gt.SetVisible(ui_show_gt_path);
 
 
-#if 0
+#if 1
     // Update path using NIMA's code.
     {
+      const std::vector<uint32_t>& imu_residual_ids = dvi_track.GetImuResidualIds();
+
       view_3d.ActivateAndScissor(stacks3d);
-      const ba::ImuCalibrationT<double>& imu = bundle_adjuster.GetImuCalibration();
+      const ba::ImuCalibrationT<double>& imu = dvi_track.GetImuCalibration();
       std::vector<ba::ImuPoseT<double>> imu_poses;
+      const ba::InterpolationBufferT<ba::ImuMeasurementT<double>, double>& imu_buffer
+          = dvi_track.GetImuBuffer();
 
       for (uint32_t id : imu_residual_ids) {
-        const auto& res = bundle_adjuster.GetImuResidual(id);
-        const ba::PoseT<double>& pose = bundle_adjuster.GetPose(res.pose1_id);
+        const auto& res = dvi_track.GetImuResidual(id);
+        const ba::PoseT<double>& pose = dvi_track.GetPose(res.pose1_id);
         std::vector<ba::ImuMeasurementT<double> > meas =
             imu_buffer.GetRange(res.measurements.front().time,
                                 res.measurements.back().time);
