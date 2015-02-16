@@ -66,7 +66,7 @@ class DTrack
     ///////////////////////////////////////////////////////////////////////////
     double Estimate(
         const cv::Mat&            live_grey,          // Input: Live image (float format, normalized).
-        Sophus::SE3Group<double>& Trl,                // Input/Output: Transform between grey cameras (input is hint).
+        Sophus::SE3Group<double>& Trl,                // Input/Output: Transform between grey cameras (vision frame/input is hint).
         Eigen::Matrix6d&          covariance,         // Output: Covariance
         bool                      use_pyramid = true  // Input: Options.
       );

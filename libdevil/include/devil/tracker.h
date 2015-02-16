@@ -31,6 +31,19 @@
 
 namespace devil {
 
+/////////////////////////////////////////////////////////////////////////////
+/// Convert greyscale image to float and normalizes.
+inline cv::Mat ConvertAndNormalize(const cv::Mat& in)
+{
+  cv::Mat out;
+  in.convertTo(out, CV_32FC1);
+  out /= 255.0;
+  return out;
+}
+
+
+/////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////
 class Tracker {
 
 public:
@@ -109,6 +122,24 @@ public:
     return imu_residual_ids_;
   }
 
+  // For debugging. Remove later.
+  const ba::ImuCalibrationT<double>& GetImuCalibration()
+  {
+    return bundle_adjuster_.GetImuCalibration();
+  }
+
+  // For debugging. Remove later.
+  const ba::PoseT<double>& GetPose(const uint32_t id)
+  {
+    return bundle_adjuster_.GetPose(id);
+  }
+
+  // For debugging. Remove later.
+  const ba::InterpolationBufferT<ba::ImuMeasurementT<double>, double>& GetImuBuffer()
+  {
+    return imu_buffer_;
+  }
+
 
   ///
   ///////////////////////////////////////////////////////////////////////////
@@ -135,11 +166,11 @@ private:
   bool                                              ba_has_converged_;
 
   calibu::CameraRig                                 rig_;
+  Sophus::SE3d                                      Tic_;
   Sophus::SE3d                                      current_pose_;
   double                                            current_time_;
 
   /// DTrack variables.
-  Sophus::SE3d                                      Trv_;
   DTrack                                            dtrack_;
   Eigen::Matrix6d                                   dtrack_covariance_;
   std::deque<DTrackPose>                            dtrack_window_;
