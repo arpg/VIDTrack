@@ -493,7 +493,8 @@ double DTrack::Estimate(
 
         // Check degenerate system.
         if (lu_JTJ.rank() < 6) {
-          LOG(WARNING) << "[@L:" << pyramid_lvl+1 << " I:" << num_iters+1 << "] LS trashed. Rank deficient!";
+          LOG(WARNING) << "[@L:" << pyramid_lvl << " I:"
+                       << num_iters << "] LS trashed. Rank deficient!";
         }
 
         X = -(lu_JTJ.solve(RHS));
@@ -506,7 +507,8 @@ double DTrack::Estimate(
 
         // Check degenerate system.
         if (lu_JTJ.rank() < 3) {
-          LOG(WARNING) << "[@L:" << pyramid_lvl+1 << " I:" << num_iters+1 << "] LS trashed. Rank deficient!";
+          LOG(WARNING) << "[@L:" << pyramid_lvl << " I:"
+                       << num_iters << "] LS trashed. Rank deficient!";
         }
 
         Eigen::Vector3d rX;
@@ -527,17 +529,24 @@ double DTrack::Estimate(
         // Update Trl.
         Trl = (Tlr*Sophus::SE3Group<double>::exp(X)).inverse();
 
+        if (pyramid_lvl == 1) {
+          LOG(INFO) << "[@L:" << pyramid_lvl << " I:"
+                    << num_iters << "] Update is: " << Trl.log().transpose();
+        }
+
         // Store hessian.
         if (pyramid_lvl == 0) {
           hessian = pose_ref.hessian;
         }
 
         if (X.norm() < 1e-5) {
-          VLOG(1) << "[@L:" << pyramid_lvl+1 << " I:" << num_iters+1 << "] Update is too small. Breaking early!";
+          VLOG(1) << "[@L:" << pyramid_lvl << " I:"
+                  << num_iters << "] Update is too small. Breaking early!";
           break;
         }
       } else {
-        VLOG(1) << "[@L:" << pyramid_lvl+1 << " I:" << num_iters+1 << "] Error is increasing. Breaking early!";
+        VLOG(1) << "[@L:" << pyramid_lvl << " I:"
+                << num_iters << "] Error is increasing. Breaking early!";
         break;
       }
     }
