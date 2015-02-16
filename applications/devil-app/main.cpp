@@ -364,6 +364,8 @@ int main(int argc, char** argv)
       // Reset reference image for DTrack.
       keyframe_image = current_image;
       keyframe_depth = images->at(1)->Mat();
+      cv::Mat maskNAN = cv::Mat(keyframe_depth != keyframe_depth);
+      keyframe_depth.setTo(0, maskNAN);
       keyframe_timestamp = images->at(0)->Timestamp();
 
       // Init DEVIL.
@@ -413,6 +415,8 @@ int main(int argc, char** argv)
         // Reset reference image for DTrack.
         keyframe_image = current_image;
         keyframe_depth = images->at(1)->Mat();
+        cv::Mat maskNAN = cv::Mat(keyframe_depth != keyframe_depth);
+        keyframe_depth.setTo(0, maskNAN);
         keyframe_timestamp = current_timestamp;
 
         // Update path.
