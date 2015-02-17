@@ -1,13 +1,12 @@
 cmake_minimum_required(VERSION 2.8.10)
 project(DEVIL)
 
-if(NOT CMAKE_BUILD_TYPE)
-  set(CMAKE_BUILD_TYPE Release)
-endif()
-
+# Include local cmake modules directory.
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake_modules/")
 
+# Default flags.
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++0x -Wall -Wextra")
+
 
 # Library files.
 add_subdirectory(libdevil)

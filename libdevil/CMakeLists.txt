@@ -15,11 +15,7 @@ find_package(Sophus REQUIRED)
 find_package(OpenCV2 REQUIRED)
 find_package(Calibu 0.1 REQUIRED)
 find_package(BA REQUIRED)
-find_package(TBB QUIET)
-
-if(TBB_FOUND)
-    add_definitions(-DHAVE_TBB)
-endif()
+find_package(TBB REQUIRED)
 
 
 #################################################
@@ -34,9 +30,6 @@ list(APPEND DEVIL_INC_DIRS
     ${BA_INCLUDE_DIRS}
     ${TBB_INCLUDE_DIRS}
    )
-
-# Assign variable for local applications.
-set(DEVIL_INCLUDE_DIRS ${DEVIL_INC_DIRS} PARENT_SCOPE)
 
 # Add include directories to library.
 include_directories(${DEVIL_INC_DIRS})
@@ -56,13 +49,8 @@ list(APPEND DEVIL_LIBS
     ${OpenCV2_LIBRARIES}
     ${Calibu_LIBRARIES}
     ${BA_LIBRARIES}
+    ${TBB_LIBRARIES}
    )
-if(TBB_FOUND)
-  list(APPEND DEVIL_LIBS ${TBB_LIBRARIES})
-endif()
-
-# Assign variable for local applications.
-set(DEVIL_LIBRARIES "devil;${DEVIL_LIBS}" PARENT_SCOPE)
 
 
 #################################################
@@ -80,19 +68,19 @@ set(DEVIL_SRCS
 
 #################################################
 # Define library.
-def_library(devil
+def_library(libdevil
   SOURCES ${DEVIL_HDRS} ${DEVIL_SRCS}
   LINK_LIBS ${DEVIL_LIBS}
-  PACKAGE DEVIL)
+  PACKAGE DevilTrack)
 
 
 #################################################
 # Export library to cmake.
-export_package(DEVIL
-  TARGETS devil
+export_package(DevilTrack
+  TARGETS libdevil
   VERSION ${DEVIL_VERSION}
-  LIBRARY devil
-  LIBRARIES devil
+  LIBRARY libdevil
+  LIBRARIES libdevil
   INCLUDE_DIRS ${DEVIL_INC_DIRS}
   LINK_DIRS ${DEVIL_LINK_DIRS}
   )
