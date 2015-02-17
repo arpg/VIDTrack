@@ -20,8 +20,45 @@
 
 #include <miniglog/logging.h>
 
-
 using namespace devil;
+
+inline Eigen::Vector3d R2Cart(const Eigen::Matrix3d& R) {
+  Eigen::Vector3d rpq;
+  // roll
+  rpq[0] = atan2(R(2, 1), R(2, 2));
+
+  // pitch
+  double det = -R(2, 0) * R(2, 0) + 1.0;
+  if (det <= 0) {
+    if (R(2, 0) > 0) {
+      rpq[1] = -M_PI / 2.0;
+    } else {
+      rpq[1] = M_PI / 2.0;
+    }
+  } else {
+    rpq[1] = -asin(R(2, 0));
+  }
+  // yaw
+  rpq[2] = atan2(R(1, 0), R(0, 0));
+  return rpq;
+}
+
+
+inline Eigen::Matrix<double, 6, 1> T2Cart(const Eigen::Matrix4d& T) {
+  Eigen::Matrix<double, 6, 1> Cart;
+  Eigen::Vector3d rpq = R2Cart(T.block<3, 3>(0, 0));
+  Cart[0] = T(0, 3);
+  Cart[1] = T(1, 3);
+  Cart[2] = T(2, 3);
+  Cart[3] = rpq[0];
+  Cart[4] = rpq[1];
+  Cart[5] = rpq[2];
+  return Cart;
+}
+
+
+
+
 
 ///////////////////////////////////////////////////////////////////////////
 Tracker::Tracker(unsigned int window_size, unsigned int pyramid_levels)
@@ -114,9 +151,17 @@ void Tracker::ConfigureBA(const calibu::CameraRig& rig,
       model.T_wc = model.T_wc * Trv;
     }
 
+    // Set gravity.
+    Eigen::Matrix<double, 3, 1> gravity;
+//    gravity << 0, -9.806, 0;
+    gravity << 0, 0, -9.806;
+//    bundle_adjuster_.SetGravity(gravity);
+
     // Set up BA options.
     options_ = options;
     ba::debug_level_threshold = -1;
+
+    current_pose_ = Tic_;
 
     config_ba_ = true;
   }
@@ -136,11 +181,15 @@ void Tracker::Estimate(
 
   Sophus::SE3d rel_pose_estimate;
 
+  Eigen::Matrix6d cov;
+  cov.setIdentity();
+  cov *= 1e16;
+
   ///--------------------
   /// If BA has converged, integrate IMU measurements (if available) instead
   /// of doing full pyramid.
   bool use_pyramid = true;
-  if (ba_has_converged_ && false) {
+  if (ba_has_converged_) {
     // Get IMU measurements between keyframe and current frame.
     CHECK_LT(current_time_, time);
     std::vector<ImuMeasurement> imu_measurements =
@@ -166,9 +215,6 @@ void Tracker::Estimate(
       rel_pose_estimate = last_adjusted_pose.t_wp.inverse() * new_pose.t_wp;
 
       std::cout << "Integrated Pose: " << rel_pose_estimate.log().transpose() << std::endl;
-
-      // Convert pose estimate from robotics frame to vision.
-//      rel_pose_estimate = Trv_.inverse() * rel_pose_estimate * Trv_;
 
       // Do not use pyramid since the IMU should already have us at basin.
       use_pyramid = false;
@@ -219,24 +265,28 @@ void Tracker::Estimate(
       // BA window holds global poses, so we need one more pose to hold
       // all poses in window.
       // First global pose is world origin.
-      Sophus::SE3d global_pose;
+      Sophus::SE3d global_pose = Tic_;
 
       // Push first pose and keep track of ID.
       int cur_id, prev_id;
-      prev_id = bundle_adjuster_.AddPose(Tic_*global_pose, true,
+      prev_id = bundle_adjuster_.AddPose(global_pose, true,
                                          dtrack_window_[0].time_a);
+      std::cout << "Pose Added: " << T2Cart((global_pose).matrix()).transpose() << std::endl;
 
       // Push rest of DTrack binary constraints.
       for (size_t ii = 0; ii < dtrack_window_.size(); ++ii) {
         DTrackPose& dtrack_rel_pose = dtrack_window_[ii];
         global_pose *= dtrack_rel_pose.T_ab;
 
-        cur_id = bundle_adjuster_.AddPose(Tic_*global_pose, true,
+        std::cout << "Pose Added: " << T2Cart((global_pose).matrix()).transpose() << std::endl;
+
+        cur_id = bundle_adjuster_.AddPose(global_pose, true,
                                           dtrack_rel_pose.time_b);
 
         bundle_adjuster_.AddBinaryConstraint(prev_id, cur_id,
                                              dtrack_rel_pose.T_ab,
                                              dtrack_rel_pose.covariance);
+//                                             cov);
 
         // Get IMU measurements between frames.
         std::vector<ImuMeasurement> imu_measurements =
@@ -259,8 +309,9 @@ void Tracker::Estimate(
                                          front_adjusted_pose.v_w,
                                          front_adjusted_pose.b, true,
                                          front_adjusted_pose.time);
+      std::cout << "Pose Added: " << T2Cart(front_adjusted_pose.t_wp.matrix()).transpose() << std::endl;
 
-      CHECK_EQ(ba_window_.size(),dtrack_window_.size())
+      CHECK_EQ(ba_window_.size(), dtrack_window_.size())
           << "BA: " << ba_window_.size() << " DTrack: " << dtrack_window_.size();
 
       // Push rest of BA poses.
@@ -272,6 +323,7 @@ void Tracker::Estimate(
                                           adjusted_pose.v_w,
                                           adjusted_pose.b, true,
                                           adjusted_pose.time);
+        std::cout << "Pose Added: " << T2Cart(adjusted_pose.t_wp.matrix()).transpose() << std::endl;
 
         DTrackPose& dtrack_rel_pose = dtrack_window_[ii-1];
 
@@ -281,6 +333,7 @@ void Tracker::Estimate(
         bundle_adjuster_.AddBinaryConstraint(prev_id, cur_id,
                                              dtrack_rel_pose.T_ab,
                                              dtrack_rel_pose.covariance);
+//                                             cov);
 
         // Get IMU measurements between frames.
         std::vector<ImuMeasurement> imu_measurements =
@@ -298,17 +351,18 @@ void Tracker::Estimate(
       ba::PoseT<double>& last_adjusted_pose = ba_window_.back();
       CHECK_EQ(kWindowSize, dtrack_window_.size());
       DTrackPose& dtrack_rel_pose = dtrack_window_[kWindowSize-1];
-      Sophus::SE3d global_pose = last_adjusted_pose.t_wp * Tic_ * dtrack_rel_pose.T_ab * Tic_.inverse();
-      Sophus::SE3d global_pose2 = last_adjusted_pose.t_wp * Tic_ * dtrack_rel_pose.T_ab;
-
-      std::cout << "Adjusted Pose: " << Sophus::SE3::log(global_pose).transpose() << std::endl;
-      std::cout << "Adjusted Pose: " << Sophus::SE3::log(global_pose2).transpose() << std::endl;
+      std::cout << "Last Adjusted Pose: " << T2Cart(last_adjusted_pose.t_wp.matrix()).transpose() << std::endl;
+      std::cout << "Estimated Rel T: " << Sophus::SE3::log(dtrack_rel_pose.T_ab).transpose() << std::endl;
+      Sophus::SE3d global_pose = last_adjusted_pose.t_wp * dtrack_rel_pose.T_ab;
 
       cur_id = bundle_adjuster_.AddPose(global_pose, true, dtrack_rel_pose.time_b);
+
+      std::cout << "Pose Added: " << T2Cart(global_pose.matrix()).transpose() << std::endl;
 
       bundle_adjuster_.AddBinaryConstraint(prev_id, cur_id,
                                            dtrack_rel_pose.T_ab,
                                            dtrack_rel_pose.covariance);
+//                                           cov);
 
       // Get IMU measurements between frames.
       std::vector<ImuMeasurement> imu_measurements =
@@ -341,11 +395,9 @@ void Tracker::Estimate(
     }
 
     ba::PoseT<double>& last_adjusted_pose = ba_window_.back();
-    std::cout << "IMU-Camera Transform: " <<
-                 last_adjusted_pose.t_vs.log().transpose() << std::endl;
 
     std::cout << "Last Adjusted Pose: " <<
-                 last_adjusted_pose.t_wp.log().transpose() << std::endl;
+                 T2Cart(last_adjusted_pose.t_wp.matrix()).transpose() << std::endl;
 
 
     // Pop first elements of each queue
@@ -356,9 +408,6 @@ void Tracker::Estimate(
   // If BA has not converged yet, return visual only global pose.
   // Otherwise, return BA's adjusted pose.
   if (ba_has_converged_ == false) {
-    // Convert DTrack relative pose estimate from vision to robotics frame.
-    rel_pose_estimate = Tic_ * rel_pose_estimate * Tic_.inverse();
-
     current_pose_ *= rel_pose_estimate;
   } else {
     CHECK_EQ(bundle_adjuster_.GetNumPoses(), kWindowSize+1);

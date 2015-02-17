@@ -25,6 +25,7 @@
 #include <ba/BundleAdjuster.h>
 #include <ba/InterpolationBuffer.h>
 #include <ba/Types.h>
+#include <calibu/cam/CameraRig.h>
 
 #include <devil/dtrack.h>
 
@@ -138,6 +139,12 @@ public:
   const ba::InterpolationBufferT<ba::ImuMeasurementT<double>, double>& GetImuBuffer()
   {
     return imu_buffer_;
+  }
+
+  // For debugging. Remove later.
+  const std::deque<ba::PoseT<double> >& GetAdjustedPoses()
+  {
+    return ba_window_;
   }
 
 

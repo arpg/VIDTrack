@@ -209,11 +209,6 @@ int main(int argc, char** argv)
   ///----- DTrack aux variables.
   cv::Mat keyframe_image, keyframe_depth;
 
-
-  ///----- BA aux variables.
-  std::vector<uint32_t>                             imu_residual_ids;
-
-
   ///----- Load file of ground truth poses (required).
   std::vector<Sophus::SE3d> poses;
   {
@@ -274,7 +269,7 @@ int main(int argc, char** argv)
       } else {
         // Robotics convention (default).
         poses.push_back(calibu::ToCoordinateConvention(T,
-                                        calibu::RdfRobotics.inverse()));
+                                        calibu::RdfRobotics));
       }
     }
     std::cout << "- NOTE: " << poses.size() << " poses loaded." << std::endl;
@@ -326,11 +321,6 @@ int main(int argc, char** argv)
   // Image holder.
   std::shared_ptr<pb::ImageArray> images = pb::ImageArray::Create();
 
-  // Permutation matrix to bring things into robotic reference frame.
-  Sophus::SE3d permutation;
-  permutation.so3() = calibu::RdfRobotics;
-
-
   /////////////////////////////////////////////////////////////////////////////
   ///---- MAIN LOOP
   ///
@@ -353,9 +343,9 @@ int main(int argc, char** argv)
       frame_index = 0;
 
       // Reset map and current pose.
-      current_pose = permutation;
+      current_pose = Sophus::SE3d();
       path_ba_vec.push_back(current_pose);
-      path_gt_vec.push_back(permutation * poses[0].inverse() * poses[frame_index]);
+      path_gt_vec.push_back(poses[0].inverse() * poses[frame_index]);
 
       // Capture first image.
       capture_flag = camera.Capture(*images);
@@ -401,12 +391,15 @@ int main(int argc, char** argv)
 
         ///----- Update GUI objects.
         // Update poses.
-        Sophus::SE3d gt_pose = permutation *
-                          (poses[0].inverse() * poses[frame_index]);
+        Sophus::SE3d gt_pose = (poses[0].inverse() * poses[frame_index]);
 
+        std::cout << "-------------------------------------------" << std::endl;
+        std::cout << "Current Pose: " << Sophus::SE3::log(current_pose).transpose() << std::endl;
         std::cout << "GT Pose: " << Sophus::SE3::log(poses[0].inverse() * poses[frame_index]).transpose() << std::endl;
-        std::cout << "GT Rel Pose: " << Sophus::SE3::log(poses[frame_index-1].inverse() * poses[frame_index]).transpose() << std::endl;
-        std::cout << "Pose Error: " << Sophus::SE3::log(current_pose.inverse() * gt_pose).head(3).transpose() << std::endl;
+        std::cout << "Pose Error: " << Sophus::SE3::log(current_pose.inverse() * gt_pose).transpose() << std::endl;
+        Sophus::SE3d Trv;
+        Trv.so3() = calibu::RdfRobotics;
+        std::cout << "GT Rel Pose: " << Sophus::SE3::log(Trv.inverse() * poses[frame_index-1].inverse() * poses[frame_index] * Trv).transpose() << std::endl;
 
         // Update error.
         analytics["Path Error"] =
@@ -421,7 +414,12 @@ int main(int argc, char** argv)
 
         // Update path.
         path_ba_vec.push_back(current_pose);
-        path_gt_vec.push_back(permutation*poses[0].inverse()*poses[frame_index]);
+//        path_gt_vec.push_back(poses[0].inverse()*poses[frame_index]);
+        path_gt_vec.clear();
+        const std::deque<ba::PoseT<double> > ba_poses = dvi_track.GetAdjustedPoses();
+        for (size_t ii = 0; ii < ba_poses.size(); ++ii) {
+          path_gt_vec.push_back(ba_poses[ii].t_wp);
+        }
 
         // Update analytics.
         analytics_view.Update(analytics);

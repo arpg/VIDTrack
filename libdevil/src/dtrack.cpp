@@ -415,7 +415,7 @@ double DTrack::Estimate(
   std::vector<unsigned int> vec_max_iterations = {1, 2, 3, 4};
 
   if (use_pyramid == false) {
-    vec_max_iterations = {3, 0, 0, 0};
+    vec_max_iterations = {1, 0, 0, 0};
   }
 
   CHECK_EQ(vec_full_estimate.size(), kPyramidLevels);
@@ -483,6 +483,11 @@ double DTrack::Estimate(
       squared_error        = pose_ref.error;
       number_observations  = pose_ref.num_obs;
 
+      // Store Hessian.
+      if (pyramid_lvl == 0) {
+        hessian = pose_ref.hessian;
+      }
+
       // Solution.
       Eigen::Vector6d X;
 
@@ -529,14 +534,9 @@ double DTrack::Estimate(
         // Update Trl.
         Trl = (Tlr*Sophus::SE3Group<double>::exp(X)).inverse();
 
-        if (pyramid_lvl == 1) {
+        if (pyramid_lvl <= 1) {
           LOG(INFO) << "[@L:" << pyramid_lvl << " I:"
-                    << num_iters << "] Update is: " << Trl.log().transpose();
-        }
-
-        // Store hessian.
-        if (pyramid_lvl == 0) {
-          hessian = pose_ref.hessian;
+                    << num_iters << "] Updated Pose: " << Trl.log().transpose();
         }
 
         if (X.norm() < 1e-5) {
@@ -554,6 +554,7 @@ double DTrack::Estimate(
 
   // Set covariance output.
   covariance = hessian.inverse();
+//  std::cout << "Covariance: " << std::endl << covariance << std::endl;
 
   return last_error;
 }
