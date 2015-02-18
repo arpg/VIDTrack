@@ -21,22 +21,35 @@
 
 #include <Eigen/Eigen>
 #include <sophus/sophus.hpp>
-#include <opencv2/opencv.hpp>
 
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Woverloaded-virtual"
+#endif
+#include <opencv.hpp>
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
+
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-parameter"
+#endif
 #include <ba/BundleAdjuster.h>
 #include <ba/Types.h>
 #include <ba/InterpolationBuffer.h>
 #include <calibu/Calibu.h>
-#include <calibu/calib/LocalParamSe3.h>
-#include <calibu/calib/CostFunctionAndParams.h>
-
 #include <HAL/Utils/GetPot>
 #include <HAL/Utils/TicToc.h>
 #include <HAL/Camera/CameraDevice.h>
 #include <HAL/IMU/IMUDevice.h>
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
 
 #include <pangolin/pangolin.h>
 #include <SceneGraph/SceneGraph.h>
+
 #include <libGUI/AnalyticsView.h>
 #include <libGUI/Timer.h>
 #include <libGUI/TimerView.h>
@@ -44,18 +57,6 @@
 #include <libGUI/GLPathAbs.h>
 
 #include <devil/tracker.h>
-
-
-
-/////////////////////////////////////////////////////////////////////////////
-/// Convert greyscale image to float and normalizes.
-inline cv::Mat ConvertAndNormalize(const cv::Mat& in)
-{
-  cv::Mat out;
-  in.convertTo(out, CV_32FC1);
-  out /= 255.0;
-  return out;
-}
 
 
 /////////////////////////////////////////////////////////////////////////////
@@ -256,7 +257,9 @@ int main(int argc, char** argv)
         pose(0) *= -1;
         pose(2) *= -1;
         Sophus::SE3d Tt(SceneGraph::GLCart2T(pose));
-        poses.push_back(Tt);
+//        poses.push_back(Tt);
+        poses.push_back(calibu::ToCoordinateConvention(Tt,
+                                                       calibu::RdfRobotics));
       } else if (cl_args.search("-T")) {
         // Tsukuba convention.
         Eigen::Matrix3d tsukuba_convention;
@@ -349,7 +352,7 @@ int main(int argc, char** argv)
 
       // Capture first image.
       capture_flag = camera.Capture(*images);
-      cv::Mat current_image = ConvertAndNormalize(images->at(0)->Mat());
+      cv::Mat current_image = devil::ConvertAndNormalize(images->at(0)->Mat());
 
       // Reset reference image for DTrack.
       keyframe_image = current_image;
@@ -379,7 +382,7 @@ int main(int argc, char** argv)
         paused = true;
       } else {
         // Convert to float and normalize.
-        cv::Mat current_image = ConvertAndNormalize(images->at(0)->Mat());
+        cv::Mat current_image = devil::ConvertAndNormalize(images->at(0)->Mat());
         current_timestamp = images->at(0)->Timestamp();
 
         // Get pose for this image.
@@ -396,7 +399,7 @@ int main(int argc, char** argv)
         std::cout << "-------------------------------------------" << std::endl;
         std::cout << "Current Pose: " << Sophus::SE3::log(current_pose).transpose() << std::endl;
         std::cout << "GT Pose: " << Sophus::SE3::log(poses[0].inverse() * poses[frame_index]).transpose() << std::endl;
-        std::cout << "Pose Error: " << Sophus::SE3::log(current_pose.inverse() * gt_pose).transpose() << std::endl;
+        std::cout << "Pose Error: " << Sophus::SE3::log(current_pose.inverse() * gt_pose).head(3).transpose() << std::endl;
         Sophus::SE3d Trv;
         Trv.so3() = calibu::RdfRobotics;
         std::cout << "GT Rel Pose: " << Sophus::SE3::log(Trv.inverse() * poses[frame_index-1].inverse() * poses[frame_index] * Trv).transpose() << std::endl;
@@ -414,12 +417,14 @@ int main(int argc, char** argv)
 
         // Update path.
         path_ba_vec.push_back(current_pose);
-//        path_gt_vec.push_back(poses[0].inverse()*poses[frame_index]);
+        path_gt_vec.push_back(poses[0].inverse()*poses[frame_index]);
+#if 0
         path_gt_vec.clear();
         const std::deque<ba::PoseT<double> > ba_poses = dvi_track.GetAdjustedPoses();
         for (size_t ii = 0; ii < ba_poses.size(); ++ii) {
           path_gt_vec.push_back(ba_poses[ii].t_wp);
         }
+#endif
 
         // Update analytics.
         analytics_view.Update(analytics);
@@ -450,7 +455,7 @@ int main(int argc, char** argv)
     gl_path_gt.SetVisible(ui_show_gt_path);
 
 
-#if 1
+#if 0
     // Update path using NIMA's code.
     {
       const std::vector<uint32_t>& imu_residual_ids = dvi_track.GetImuResidualIds();

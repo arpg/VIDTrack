@@ -115,9 +115,9 @@ void Tracker::ConfigureBA(const calibu::CameraRig& rig)
   // Set up default BA options.
   ba::Options<double> options;
   options.regularize_biases_in_batch  = true;
-  options.use_triangular_matrices = false;
-  options.use_sparse_solver = false;
-  options.use_dogleg = true;
+  options.use_triangular_matrices     = false;
+  options.use_sparse_solver           = false;
+  options.use_dogleg                  = true;
 
   ConfigureBA(rig, options);
 }
@@ -189,7 +189,7 @@ void Tracker::Estimate(
   /// If BA has converged, integrate IMU measurements (if available) instead
   /// of doing full pyramid.
   bool use_pyramid = true;
-  if (ba_has_converged_) {
+  if (ba_has_converged_ && false) {
     // Get IMU measurements between keyframe and current frame.
     CHECK_LT(current_time_, time);
     std::vector<ImuMeasurement> imu_measurements =
@@ -202,8 +202,8 @@ void Tracker::Estimate(
     } else {
       std::vector<ba::ImuPoseT<double> > imu_poses;
 
-      ba::PoseT<double> last_adjusted_pose =
-          bundle_adjuster_.GetPose(bundle_adjuster_.GetNumPoses()-1);
+      ba::PoseT<double>& last_adjusted_pose = ba_window_.back();
+      CHECK_EQ(current_time_, last_adjusted_pose.time);
 
       ba::ImuPoseT<double> new_pose =
           decltype(bundle_adjuster_)::ImuResidual::IntegrateResidual(
@@ -249,12 +249,28 @@ void Tracker::Estimate(
   // Set current frame as new keyframe.
   dtrack_.SetKeyframe(grey_image, depth_image);
 
+  if (ba_has_converged_) {
+    for (size_t ii = 0; ii < ba_window_.size(); ++ii) {
+      ba::PoseT<double>& adjusted_pose = ba_window_[ii];
+      std::cout << "---- " << T2Cart(adjusted_pose.t_wp.matrix()).transpose() << std::endl;
+    }
+
+    std::cout << "===========================" << std::endl;
+
+    ba::PoseT<double>& adjusted_pose = ba_window_.front();
+    std::cout << "---- " << T2Cart((adjusted_pose.t_wp).matrix()).transpose() << std::endl;
+    for (size_t ii = 0; ii < ba_window_.size(); ++ii) {
+      ba::PoseT<double>& adjusted_pose = ba_window_[ii];
+      DTrackPose& dtrack_rel_pose = dtrack_window_[ii];
+      std::cout << "---- " << T2Cart((adjusted_pose.t_wp*dtrack_rel_pose.T_ab).matrix()).transpose() << std::endl;
+    }
+  }
+
 
   ///--------------------
   /// Windowed BA.
   if (dtrack_window_.size() == kWindowSize) {
     bundle_adjuster_.Init(options_, 10, 1000);
-    bundle_adjuster_.AddCamera(rig_.cameras[0].camera, rig_.cameras[0].T_wc);
 
     // Reset IMU residuals IDs.
     imu_residual_ids_.clear();
@@ -271,18 +287,18 @@ void Tracker::Estimate(
       int cur_id, prev_id;
       prev_id = bundle_adjuster_.AddPose(global_pose, true,
                                          dtrack_window_[0].time_a);
-      std::cout << "Pose Added: " << T2Cart((global_pose).matrix()).transpose() << std::endl;
+      std::cout << "Pose[" << prev_id << "] Added: " << T2Cart((global_pose).matrix()).transpose() << std::endl;
 
       // Push rest of DTrack binary constraints.
       for (size_t ii = 0; ii < dtrack_window_.size(); ++ii) {
         DTrackPose& dtrack_rel_pose = dtrack_window_[ii];
         global_pose *= dtrack_rel_pose.T_ab;
 
-        std::cout << "Pose Added: " << T2Cart((global_pose).matrix()).transpose() << std::endl;
-
         cur_id = bundle_adjuster_.AddPose(global_pose, true,
                                           dtrack_rel_pose.time_b);
+        std::cout << "Pose[" << cur_id << "] Added: " << T2Cart((global_pose).matrix()).transpose() << std::endl;
 
+        CHECK_EQ(cur_id-1, prev_id);
         bundle_adjuster_.AddBinaryConstraint(prev_id, cur_id,
                                              dtrack_rel_pose.T_ab,
                                              dtrack_rel_pose.covariance);
@@ -300,6 +316,9 @@ void Tracker::Estimate(
         prev_id = cur_id;
       }
     } else {
+      CHECK_EQ(ba_window_.size(), dtrack_window_.size())
+          << "BA: " << ba_window_.size() << " DTrack: " << dtrack_window_.size();
+
       // Push first pose and keep track of ID.
       int cur_id, prev_id;
       ba::PoseT<double>& front_adjusted_pose = ba_window_.front();
@@ -309,10 +328,7 @@ void Tracker::Estimate(
                                          front_adjusted_pose.v_w,
                                          front_adjusted_pose.b, true,
                                          front_adjusted_pose.time);
-      std::cout << "Pose Added: " << T2Cart(front_adjusted_pose.t_wp.matrix()).transpose() << std::endl;
-
-      CHECK_EQ(ba_window_.size(), dtrack_window_.size())
-          << "BA: " << ba_window_.size() << " DTrack: " << dtrack_window_.size();
+      std::cout << "Pose[" << prev_id << "] Added: " << T2Cart(front_adjusted_pose.t_wp.matrix()).transpose() << std::endl;
 
       // Push rest of BA poses.
       for (size_t ii = 1; ii < ba_window_.size(); ++ii) {
@@ -323,13 +339,14 @@ void Tracker::Estimate(
                                           adjusted_pose.v_w,
                                           adjusted_pose.b, true,
                                           adjusted_pose.time);
-        std::cout << "Pose Added: " << T2Cart(adjusted_pose.t_wp.matrix()).transpose() << std::endl;
+        std::cout << "Pose[" << cur_id << "] Added: " << T2Cart(adjusted_pose.t_wp.matrix()).transpose() << std::endl;
 
         DTrackPose& dtrack_rel_pose = dtrack_window_[ii-1];
 
         CHECK_EQ(adjusted_pose.time, dtrack_rel_pose.time_b);
 
         // Add binary constraints.
+        CHECK_EQ(cur_id-1, prev_id);
         bundle_adjuster_.AddBinaryConstraint(prev_id, cur_id,
                                              dtrack_rel_pose.T_ab,
                                              dtrack_rel_pose.covariance);
@@ -357,8 +374,9 @@ void Tracker::Estimate(
 
       cur_id = bundle_adjuster_.AddPose(global_pose, true, dtrack_rel_pose.time_b);
 
-      std::cout << "Pose Added: " << T2Cart(global_pose.matrix()).transpose() << std::endl;
+      std::cout << "Pose[" << cur_id << "] Added: " << T2Cart(global_pose.matrix()).transpose() << std::endl;
 
+      CHECK_EQ(cur_id-1, prev_id);
       bundle_adjuster_.AddBinaryConstraint(prev_id, cur_id,
                                            dtrack_rel_pose.T_ab,
                                            dtrack_rel_pose.covariance);
@@ -375,23 +393,13 @@ void Tracker::Estimate(
 
     // Solve.
     bundle_adjuster_.Solve(1000, 1.0);
+    ba_has_converged_ = true;
 
     // Get adjusted poses.
-    if (ba_has_converged_ == false) {
-      // Since this is the first time it runs, push ALL poses.
-      CHECK_EQ(bundle_adjuster_.GetNumPoses(), kWindowSize+1);
-      for (size_t ii = 0; ii < bundle_adjuster_.GetNumPoses(); ++ii) {
-        ba_window_.push_back(bundle_adjuster_.GetPose(ii));
-      }
-
-      std::cout << "First pose should not have moved: " <<
-                   ba_window_[0].t_wp.log().transpose() << std::endl;
-
-      ba_has_converged_ = true;
-    } else {
-      // Push in last adjusted pose to BA deque.
-      ba_window_.push_back(
-            bundle_adjuster_.GetPose(bundle_adjuster_.GetNumPoses() - 1));
+    CHECK_EQ(bundle_adjuster_.GetNumPoses(), kWindowSize+1);
+    ba_window_.clear();
+    for (size_t ii = 1; ii < bundle_adjuster_.GetNumPoses(); ++ii) {
+      ba_window_.push_back(bundle_adjuster_.GetPose(ii));
     }
 
     ba::PoseT<double>& last_adjusted_pose = ba_window_.back();
@@ -399,10 +407,8 @@ void Tracker::Estimate(
     std::cout << "Last Adjusted Pose: " <<
                  T2Cart(last_adjusted_pose.t_wp.matrix()).transpose() << std::endl;
 
-
-    // Pop first elements of each queue
+    // Pop first element of dtrack estimates.
     dtrack_window_.pop_front();
-    ba_window_.pop_front();
   }
 
   // If BA has not converged yet, return visual only global pose.
@@ -410,9 +416,7 @@ void Tracker::Estimate(
   if (ba_has_converged_ == false) {
     current_pose_ *= rel_pose_estimate;
   } else {
-    CHECK_EQ(bundle_adjuster_.GetNumPoses(), kWindowSize+1);
-    ba::PoseT<double> last_adjusted_pose =
-        bundle_adjuster_.GetPose(bundle_adjuster_.GetNumPoses() - 1);
+    ba::PoseT<double>& last_adjusted_pose = ba_window_.back();
     current_pose_ = last_adjusted_pose.t_wp;
   }
 

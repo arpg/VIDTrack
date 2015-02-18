@@ -23,7 +23,14 @@
 
 #include <tbb/tbb.h>
 
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Woverloaded-virtual"
+#endif
 #include <opencv2/opencv.hpp>
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
 
 #include <sophus/se3.hpp>
 #include <calibu/cam/CameraRig.h>
