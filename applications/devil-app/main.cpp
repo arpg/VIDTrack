@@ -418,7 +418,7 @@ int main(int argc, char** argv)
         // Update path.
         path_ba_vec.push_back(current_pose);
         path_gt_vec.push_back(poses[0].inverse()*poses[frame_index]);
-#if 0
+#if 1
         path_gt_vec.clear();
         const std::deque<ba::PoseT<double> > ba_poses = dvi_track.GetAdjustedPoses();
         for (size_t ii = 0; ii < ba_poses.size(); ++ii) {
@@ -455,7 +455,7 @@ int main(int argc, char** argv)
     gl_path_gt.SetVisible(ui_show_gt_path);
 
 
-#if 0
+#if 1
     // Update path using NIMA's code.
     {
       const std::vector<uint32_t>& imu_residual_ids = dvi_track.GetImuResidualIds();

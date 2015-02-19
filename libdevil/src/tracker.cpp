@@ -114,6 +114,9 @@ void Tracker::ConfigureBA(const calibu::CameraRig& rig)
 {
   // Set up default BA options.
   ba::Options<double> options;
+  // The window is always considered batch since no pose is inactive,
+  // so if this is set to true it will NOT change biases much.
+  // If using datasets with no bias, set to true.
   options.regularize_biases_in_batch  = true;
   options.use_triangular_matrices     = false;
   options.use_sparse_solver           = false;
@@ -145,7 +148,7 @@ void Tracker::ConfigureBA(const calibu::CameraRig& rig,
     LOG(INFO) << "Twc:" << std::endl << rig_.cameras[0].T_wc.matrix();
     LOG(INFO) << "Tic:" << std::endl << Tic_.matrix();
 
-    // Transform offiially all cameras in rig. This is done for compatibility,
+    // Transform officially all cameras in rig. This is done for compatibility,
     // in case actual reprojection residuals are used.
     for (calibu::CameraModelAndTransform& model : rig_.cameras) {
       model.T_wc = model.T_wc * Trv;
@@ -154,19 +157,18 @@ void Tracker::ConfigureBA(const calibu::CameraRig& rig,
     // Set gravity.
     Eigen::Matrix<double, 3, 1> gravity;
 //    gravity << 0, -9.806, 0;
-    gravity << 0, 0, -9.806;
-//    bundle_adjuster_.SetGravity(gravity);
+    gravity << 0, 0, 9.806;
+    bundle_adjuster_.SetGravity(gravity);
 
     // Set up BA options.
     options_ = options;
     ba::debug_level_threshold = -1;
 
-    current_pose_ = Tic_;
-
     config_ba_ = true;
   }
 }
 
+#define USE_IMU 1
 
 ///////////////////////////////////////////////////////////////////////////
 void Tracker::Estimate(
@@ -178,6 +180,8 @@ void Tracker::Estimate(
 {
   CHECK(config_ba_ && config_dtrack_)
       << "DTrack and BA must be configured first before calling this method!";
+
+  std::cout << "+++ Pushed Image: " << time << std::endl;
 
   Sophus::SE3d rel_pose_estimate;
 
@@ -238,7 +242,7 @@ void Tracker::Estimate(
 
   // Push pose estimate into DTrack window.
   DTrackPose dtrack_rel_pose;
-  dtrack_rel_pose.T_ab        = rel_pose_estimate;
+  dtrack_rel_pose.T_ab        = Tic_ * rel_pose_estimate * Tic_.inverse();
   dtrack_rel_pose.covariance  = dtrack_covariance_;
   dtrack_rel_pose.time_a      = current_time_;
   dtrack_rel_pose.time_b      = time;
@@ -281,7 +285,7 @@ void Tracker::Estimate(
       // BA window holds global poses, so we need one more pose to hold
       // all poses in window.
       // First global pose is world origin.
-      Sophus::SE3d global_pose = Tic_;
+      Sophus::SE3d global_pose;
 
       // Push first pose and keep track of ID.
       int cur_id, prev_id;
@@ -308,10 +312,11 @@ void Tracker::Estimate(
         std::vector<ImuMeasurement> imu_measurements =
             imu_buffer_.GetRange(dtrack_rel_pose.time_a, dtrack_rel_pose.time_b);
 
+#if USE_IMU
         // Add IMU constraints.
         imu_residual_ids_.push_back(
               bundle_adjuster_.AddImuResidual(prev_id, cur_id, imu_measurements));
-
+#endif
         // Update pose IDs.
         prev_id = cur_id;
       }
@@ -356,9 +361,11 @@ void Tracker::Estimate(
         std::vector<ImuMeasurement> imu_measurements =
             imu_buffer_.GetRange(dtrack_rel_pose.time_a, dtrack_rel_pose.time_b);
 
+#if USE_IMU
         // Add IMU constraints.
         imu_residual_ids_.push_back(
               bundle_adjuster_.AddImuResidual(prev_id, cur_id, imu_measurements));
+#endif
 
         // Update pose IDs.
         prev_id = cur_id;
@@ -386,9 +393,11 @@ void Tracker::Estimate(
       std::vector<ImuMeasurement> imu_measurements =
           imu_buffer_.GetRange(dtrack_rel_pose.time_a, dtrack_rel_pose.time_b);
 
+#if USE_IMU
       // Add IMU constraints.
       imu_residual_ids_.push_back(
             bundle_adjuster_.AddImuResidual(prev_id, cur_id, imu_measurements));
+#endif
     }
 
     // Solve.
@@ -437,4 +446,5 @@ void Tracker::AddInertialMeasurement(
 {
   ImuMeasurement imu(gyro, accel, time);
   imu_buffer_.AddElement(imu);
+  std::cout << "+++ Pushed IMU: " << time << std::endl;
 }
