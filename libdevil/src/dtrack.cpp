@@ -412,17 +412,21 @@ double DTrack::Estimate(
 
   // Set pyramid max-iterations and full estimate mask.
   std::vector<bool>         vec_full_estimate  = {1, 1, 1, 0};
-  std::vector<unsigned int> vec_max_iterations = {1, 2, 3, 4};
+  std::vector<unsigned int> vec_max_iterations = {3, 3, 3, 4};
 
   if (use_pyramid == false) {
-    vec_max_iterations = {1, 0, 0, 0};
+    vec_max_iterations = {3, 0, 0, 0};
   }
 
   CHECK_EQ(vec_full_estimate.size(), kPyramidLevels);
   CHECK_EQ(vec_max_iterations.size(), kPyramidLevels);
 
   // Build live pyramid.
-  cv::buildPyramid(live_grey, live_grey_pyramid_, kPyramidLevels);
+  cv::Mat live_grey_copy = live_grey.clone();
+  _BrightnessCorrectionImagePair(reinterpret_cast<float*>(live_grey_copy.data),
+                                 reinterpret_cast<float*>(ref_grey_pyramid_[0].data),
+                                 live_grey_copy.cols*live_grey_copy.rows);
+  cv::buildPyramid(live_grey_copy, live_grey_pyramid_, kPyramidLevels);
 
   // Aux variables.
   Eigen::Matrix6d   hessian;
@@ -476,7 +480,7 @@ double DTrack::Estimate(
                           norm_c_pyr, discard_saturated, min_depth, max_depth);
 
       tbb::parallel_reduce(tbb::blocked_range<size_t>(0,
-                                                      ref_depth_img.cols*ref_depth_img.rows, 10000), pose_ref);
+                    ref_depth_img.cols*ref_depth_img.rows, 10000), pose_ref);
 
       LHS                  = pose_ref.LHS;
       RHS                  = pose_ref.RHS;
@@ -534,11 +538,6 @@ double DTrack::Estimate(
         // Update Trl.
         Trl = (Tlr*Sophus::SE3Group<double>::exp(X)).inverse();
 
-        if (pyramid_lvl <= 1) {
-          LOG(INFO) << "[@L:" << pyramid_lvl << " I:"
-                    << num_iters << "] Updated Pose: " << Trl.log().transpose();
-        }
-
         if (X.norm() < 1e-5) {
           VLOG(1) << "[@L:" << pyramid_lvl << " I:"
                   << num_iters << "] Update is too small. Breaking early!";
@@ -559,6 +558,7 @@ double DTrack::Estimate(
   return last_error;
 }
 
+
 ///////////////////////////////////////////////////////////////////////////
 inline calibu::CameraModelGeneric<double> DTrack::_ScaleCM(
     calibu::CameraModelGeneric<double> cam_model,
@@ -568,4 +568,59 @@ inline calibu::CameraModelGeneric<double> DTrack::_ScaleCM(
   const float scale = 1.0f/(1 << level);
 
   return cam_model.Scaled(scale);
+}
+
+
+///////////////////////////////////////////////////////////////////////////
+void DTrack::_BrightnessCorrectionImagePair(
+    float*          img1_ptr,
+    float*          img2_ptr,
+    size_t          image_size
+  )
+{
+  // Save original ptr.
+  float* img1_ptr_orig = img1_ptr;
+
+  // Sampling variables.
+  const size_t     sample_step = 1;
+  size_t           num_samples = 0;
+
+  // Compute mean.
+  float mean1      = 0.0;
+  float mean2      = 0.0;
+  float mean1_sqrd = 0.0;
+  float mean2_sqrd = 0.0;
+
+  for (size_t ii = 0; ii < image_size;
+       ii += sample_step, img1_ptr += sample_step, img2_ptr += sample_step) {
+    mean1       += (*img1_ptr);
+    mean1_sqrd  += (*img1_ptr) * (*img1_ptr);
+    mean2       += (*img2_ptr);
+    mean2_sqrd  += (*img2_ptr) * (*img2_ptr);
+    num_samples++;
+  }
+
+  mean1       /= num_samples;
+  mean2       /= num_samples;
+  mean1_sqrd  /= num_samples;
+  mean2_sqrd  /= num_samples;
+
+  // Compute STD.
+  float std1 = sqrt(mean1_sqrd - mean1*mean1);
+  float std2 = sqrt(mean2_sqrd - mean2*mean2);
+
+  // STD factor.
+  float std_ratio = std2/std1;
+
+  // Reset pointer.
+  img1_ptr = img1_ptr_orig;
+
+  // Normalize image.
+  float pix;
+  for (size_t ii = 0; ii < image_size; ++ii) {
+    pix = (img1_ptr[ii] - mean1)*std_ratio + mean2;
+    if(pix < 0.0)  pix = 0.0;
+    if(pix > 1.0) pix = 1.0;
+    img1_ptr[ii] = pix;
+  }
 }

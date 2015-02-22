@@ -60,7 +60,7 @@
 
 
 /////////////////////////////////////////////////////////////////////////////
-devil::Tracker                                    dvi_track(5, 4);
+devil::Tracker                                    dvi_track(10, 4);
 std::mutex                                        imu_mutex;
 
 void IMU_Handler(pb::ImuMsg& IMUdata) {
@@ -71,9 +71,9 @@ void IMU_Handler(pb::ImuMsg& IMUdata) {
                     IMUdata.gyro().data(1),
                     IMUdata.gyro().data(2));
 
-  imu_mutex.lock();
+//  imu_mutex.lock();
   dvi_track.AddInertialMeasurement(a, w, IMUdata.system_time());
-  imu_mutex.unlock();
+//  imu_mutex.unlock();
 }
 
 
@@ -116,7 +116,10 @@ int main(int argc, char** argv)
   pangolin::CreatePanel("ui").SetBounds(0, 1, 0, pangolin::Attach::Pix(panel_size));
   pangolin::Var<bool>           ui_camera_follow("ui.Camera Follow", false, true);
   pangolin::Var<bool>           ui_reset("ui.Reset", true, false);
+  pangolin::Var<bool>           ui_show_vo_path("ui.Show VO Path", true, true);
   pangolin::Var<bool>           ui_show_ba_path("ui.Show BA Path", true, true);
+  pangolin::Var<bool>           ui_show_ba_rel_path("ui.Show BA Rel Path", true, true);
+  pangolin::Var<bool>           ui_show_ba_win_path("ui.Show BA Win Path", true, true);
   pangolin::Var<bool>           ui_show_gt_path("ui.Show GT Path", true, true);
 
   // Set up container.
@@ -147,15 +150,30 @@ int main(int argc, char** argv)
   glClearColor(0, 0, 0, 1);
 
   // Add path.
+  GLPathAbs gl_path_vo;
   GLPathAbs gl_path_ba;
+  GLPathAbs gl_path_ba_rel;
+  GLPathAbs gl_path_ba_win;
   GLPathAbs gl_path_gt;
+  gl_path_vo.SetPoseDisplay(5);
   gl_path_ba.SetPoseDisplay(5);
+  gl_path_ba_rel.SetPoseDisplay(5);
+  gl_path_ba_win.SetPoseDisplay(5);
   gl_path_gt.SetPoseDisplay(5);
+  gl_path_vo.SetLineColor(1.0, 0, 1.0);
   gl_path_ba.SetLineColor(0, 1.0, 0);
+  gl_path_ba_rel.SetLineColor(0, 1.0, 1.0);
+  gl_path_ba_win.SetLineColor(1.0, 0, 0);
   gl_path_gt.SetLineColor(0, 0, 1.0);
+  gl_graph.AddChild(&gl_path_vo);
   gl_graph.AddChild(&gl_path_ba);
+  gl_graph.AddChild(&gl_path_ba_rel);
+  gl_graph.AddChild(&gl_path_ba_win);
   gl_graph.AddChild(&gl_path_gt);
+  std::vector<Sophus::SE3d>& path_vo_vec = gl_path_vo.GetPathRef();
   std::vector<Sophus::SE3d>& path_ba_vec = gl_path_ba.GetPathRef();
+  std::vector<Sophus::SE3d>& path_ba_rel_vec = gl_path_ba_rel.GetPathRef();
+  std::vector<Sophus::SE3d>& path_ba_win_vec = gl_path_ba_win.GetPathRef();
   std::vector<Sophus::SE3d>& path_gt_vec = gl_path_gt.GetPathRef();
 
   // Add grid.
@@ -317,6 +335,8 @@ int main(int argc, char** argv)
 
   ///----- Init general variables.
   unsigned int                      frame_index;
+  Sophus::SE3d                      vo_pose;
+  Sophus::SE3d                      accum_rel_pose;
   Sophus::SE3d                      current_pose;
   double                            current_timestamp;
   double                            keyframe_timestamp;
@@ -339,13 +359,18 @@ int main(int argc, char** argv)
       analytics_view.InitReset();
 
       // Reset GUI path.
+      path_vo_vec.clear();
       path_ba_vec.clear();
+      path_ba_rel_vec.clear();
+      path_ba_win_vec.clear();
       path_gt_vec.clear();
 
       // Reset frame counter.
       frame_index = 0;
 
       // Reset map and current pose.
+      vo_pose = Sophus::SE3d();
+      accum_rel_pose = Sophus::SE3d();
       current_pose = Sophus::SE3d();
       path_ba_vec.push_back(current_pose);
       path_gt_vec.push_back(poses[0].inverse() * poses[frame_index]);
@@ -375,8 +400,6 @@ int main(int argc, char** argv)
     if (!paused || pangolin::Pushed(step_once)) {
       //  Capture the new image.
       capture_flag = camera.Capture(*images);
-      std::cout << "==================================================" << std::endl;
-      std::cout << "Frame#: " << frame_index << std::endl;
 
       if (capture_flag == false) {
         paused = true;
@@ -387,8 +410,11 @@ int main(int argc, char** argv)
 
         // Get pose for this image.
         timer.Tic("DEVIL");
+        Sophus::SE3d rel_pose, vo;
         dvi_track.Estimate(current_image, images->at(1)->Mat(),
-                           current_timestamp, current_pose);
+                           current_timestamp, current_pose, rel_pose, vo);
+        accum_rel_pose *= rel_pose;
+        vo_pose *= vo;
         timer.Toc("DEVIL");
 
 
@@ -396,17 +422,13 @@ int main(int argc, char** argv)
         // Update poses.
         Sophus::SE3d gt_pose = (poses[0].inverse() * poses[frame_index]);
 
-        std::cout << "-------------------------------------------" << std::endl;
-        std::cout << "Current Pose: " << Sophus::SE3::log(current_pose).transpose() << std::endl;
-        std::cout << "GT Pose: " << Sophus::SE3::log(poses[0].inverse() * poses[frame_index]).transpose() << std::endl;
-        std::cout << "Pose Error: " << Sophus::SE3::log(current_pose.inverse() * gt_pose).head(3).transpose() << std::endl;
-        Sophus::SE3d Trv;
-        Trv.so3() = calibu::RdfRobotics;
-        std::cout << "GT Rel Pose: " << Sophus::SE3::log(Trv.inverse() * poses[frame_index-1].inverse() * poses[frame_index] * Trv).transpose() << std::endl;
-
         // Update error.
         analytics["Path Error"] =
             Sophus::SE3::log(current_pose.inverse() * gt_pose).head(3).norm();
+        analytics["Path Rel Error"] =
+            Sophus::SE3::log(accum_rel_pose.inverse() * gt_pose).head(3).norm();
+        analytics["Path VO Error"] =
+            Sophus::SE3::log(vo_pose.inverse() * gt_pose).head(3).norm();
 
         // Reset reference image for DTrack.
         keyframe_image = current_image;
@@ -416,15 +438,15 @@ int main(int argc, char** argv)
         keyframe_timestamp = current_timestamp;
 
         // Update path.
+        path_vo_vec.push_back(vo_pose);
         path_ba_vec.push_back(current_pose);
+        path_ba_rel_vec.push_back(accum_rel_pose);
         path_gt_vec.push_back(poses[0].inverse()*poses[frame_index]);
-#if 1
-        path_gt_vec.clear();
+        path_ba_win_vec.clear();
         const std::deque<ba::PoseT<double> > ba_poses = dvi_track.GetAdjustedPoses();
         for (size_t ii = 0; ii < ba_poses.size(); ++ii) {
-          path_gt_vec.push_back(ba_poses[ii].t_wp);
+          path_ba_win_vec.push_back(ba_poses[ii].t_wp);
         }
-#endif
 
         // Update analytics.
         analytics_view.Update(analytics);
@@ -451,7 +473,10 @@ int main(int argc, char** argv)
       stacks3d.Follow(current_pose.matrix());
     }
 
+    gl_path_vo.SetVisible(ui_show_vo_path);
     gl_path_ba.SetVisible(ui_show_ba_path);
+    gl_path_ba_rel.SetVisible(ui_show_ba_rel_path);
+    gl_path_ba_win.SetVisible(ui_show_ba_win_path);
     gl_path_gt.SetVisible(ui_show_gt_path);
 
 
@@ -494,8 +519,10 @@ int main(int argc, char** argv)
     }
 #endif
 
-    // Sleep a bit.
-    usleep(1e6/60.0);
+    // Sleep a bit if paused.
+    if (paused) {
+      usleep(1e6/60.0);
+    }
 
     // Stop timer and update.
     timer.Toc();

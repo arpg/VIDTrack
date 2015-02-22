@@ -101,11 +101,12 @@ public:
 
 
   ///////////////////////////////////////////////////////////////////////////
-  void Estimate(
-      const cv::Mat&  grey_image,
+  void Estimate(const cv::Mat&  grey_image,
       const cv::Mat&  depth_image,
       double          time,
-      Sophus::SE3d&   pose
+      Sophus::SE3d&   pose,
+      Sophus::SE3d&   rel_pose,
+      Sophus::SE3d&   vo_pose
     );
 
 
@@ -120,7 +121,7 @@ public:
 
 
   // For debugging. Remove later.
-  const ba::ImuResidualT<double,9,9>& GetImuResidual(const uint32_t id)
+  const ba::ImuResidualT<double,15,15>& GetImuResidual(const uint32_t id)
   {
     return bundle_adjuster_.GetImuResidual(id);
   }
@@ -161,7 +162,10 @@ public:
 
 public:
   const unsigned int kWindowSize;
+  const unsigned int kMinWindowSize;
   const unsigned int kPyramidLevels;
+
+  const double       kTimeOffset = 0.0; //-0.00195049;
 
 
 private:
@@ -187,11 +191,10 @@ private:
 
   /// DTrack variables.
   DTrack                                            dtrack_;
-  Eigen::Matrix6d                                   dtrack_covariance_;
   std::deque<DTrackPose>                            dtrack_window_;
 
   /// BA variables.
-  ba::BundleAdjuster<double, 0, 9, 0>               bundle_adjuster_;
+  ba::BundleAdjuster<double, 0, 15, 0>              bundle_adjuster_;
   ba::Options<double>                               options_;
   std::deque<ba::PoseT<double> >                    ba_window_;
   ba::InterpolationBufferT<ImuMeasurement, double>  imu_buffer_;
