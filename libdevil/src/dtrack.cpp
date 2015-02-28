@@ -269,10 +269,10 @@ public:
       const Eigen::Vector4d dIesm_dPl_KlgTlr = ((dIl+dIr)/2.0)*dPl*KlgTlr_;
 
       // J = dIesm_dPl_KlgTlr * gen_i * Pr
-      Eigen::Vector6d J;
+      Eigen::Matrix<double, 1, 6> J;
       J << dIesm_dPl_KlgTlr(0),
-          dIesm_dPl_KlgTlr(1),
-          dIesm_dPl_KlgTlr(2),
+           dIesm_dPl_KlgTlr(1),
+           dIesm_dPl_KlgTlr(2),
           -dIesm_dPl_KlgTlr(1)*hPr_g(2) + dIesm_dPl_KlgTlr(2)*hPr_g(1),
           +dIesm_dPl_KlgTlr(0)*hPr_g(2) - dIesm_dPl_KlgTlr(2)*hPr_g(0),
           -dIesm_dPl_KlgTlr(0)*hPr_g(1) + dIesm_dPl_KlgTlr(1)*hPr_g(0);
@@ -280,14 +280,12 @@ public:
 
 
       ///-------------------- Robust Norm
-      //      const double w = 1.0;
       const double w = _NormTukey(y, norm_param_);
-      //      const double w = _NormL1(y, NormC);
 
-      hessian     += J*J.transpose();
-      LHS         += J*J.transpose()*w;
-      RHS         += J*y*w;
-      error       += y*y;
+      hessian     += J.transpose() * w * J;
+      LHS         += J.transpose() * w * J;
+      RHS         += J.transpose() * w * y;
+      error       += y * y;
       num_obs++;
     }
   }
@@ -307,21 +305,12 @@ private:
   inline double _NormTukey(double r,
                            double c)
   {
-    const double absr   = fabs(r);
     const double roc    = r/c;
     const double omroc2 = 1.0f-roc*roc;
 
-    return (absr <= c) ? omroc2*omroc2 : 0.0f;
+    return (fabs(r) <= c) ? omroc2*omroc2 : 0.0f;
   }
 
-  ///////////////////////////////////////////////////////////////////////////
-  inline double _NormL1(double r,
-                        double)
-  {
-    const double absr = fabs(r);
-
-    return (absr == 0) ? 1.0f : 1.0f/absr;
-  }
 
   ///
   ///////////////////////////////////////////////////////////////////////////

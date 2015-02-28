@@ -165,8 +165,8 @@ void Tracker::ConfigureBA(const calibu::CameraRig& rig,
     // Set gravity.
     Eigen::Matrix<double, 3, 1> gravity;
 //    gravity << 0, -9.806, 0; // CityBlock
-    gravity << 0, 0, 9.806; // PathGen
-//    gravity << 0, 0, -9.806; // Rig
+//    gravity << 0, 0, 9.806; // PathGen
+    gravity << 0, 0, -9.806; // Rig
     bundle_adjuster_.SetGravity(gravity);
 
     // Set up BA options.
@@ -186,7 +186,7 @@ void Tracker::Estimate(
     const cv::Mat&  grey_image,
     const cv::Mat&  depth_image,
     double          time,
-    Sophus::SE3d&   pose,
+    Sophus::SE3d&   global_pose,
     Sophus::SE3d&   rel_pose,
     Sophus::SE3d&   vo_pose
   )
@@ -264,7 +264,7 @@ void Tracker::Estimate(
   // Push pose estimate into DTrack window.
   DTrackPose dtrack_rel_pose;
   dtrack_rel_pose.T_ab        = rel_pose_estimate;
-  dtrack_rel_pose.covariance  = dtrack_covariance;
+  dtrack_rel_pose.covariance  = dtrack_covariance; // 10000;
   dtrack_rel_pose.time_a      = current_time_;
   dtrack_rel_pose.time_b      = time;
   dtrack_window_.push_back(dtrack_rel_pose);
@@ -324,7 +324,6 @@ void Tracker::Estimate(
       bundle_adjuster_.AddBinaryConstraint(prev_id, cur_id,
                                            dtrack_rel_pose.T_ab,
                                            dtrack_rel_pose.covariance);
-//                                             cov);
 
       // Get IMU measurements between frames.
       std::vector<ImuMeasurement> imu_measurements =
@@ -369,11 +368,14 @@ void Tracker::Estimate(
     rel_pose = last_last_adjusted_pose.t_wp.inverse() * last_adjusted_pose.t_wp;
   }
 
+  // Update last estimated pose.
+  last_estimated_pose_ = global_pose;
+
   // Update time.
   current_time_ = time;
 
   // Update return pose.
-  pose = current_pose_;
+  global_pose = current_pose_;
 }
 
 

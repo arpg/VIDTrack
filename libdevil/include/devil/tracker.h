@@ -101,10 +101,11 @@ public:
 
 
   ///////////////////////////////////////////////////////////////////////////
-  void Estimate(const cv::Mat&  grey_image,
+  void Estimate(
+      const cv::Mat&  grey_image,
       const cv::Mat&  depth_image,
       double          time,
-      Sophus::SE3d&   pose,
+      Sophus::SE3d&   global_pose,
       Sophus::SE3d&   rel_pose,
       Sophus::SE3d&   vo_pose
     );
@@ -165,8 +166,9 @@ public:
   const unsigned int kMinWindowSize;
   const unsigned int kPyramidLevels;
 
-  const double       kTimeOffset = 0.0; //-0.00195049;
-
+//  const double       kTimeOffset = 0.0;
+  const double       kTimeOffset = -0.00195049; // Old
+//  const double       kTimeOffset = -0.00490676; // New
 
 private:
   struct DTrackPose {
@@ -191,6 +193,7 @@ private:
 
   /// DTrack variables.
   DTrack                                            dtrack_;
+  Sophus::SE3d                                      last_estimated_pose_;
   std::deque<DTrackPose>                            dtrack_window_;
 
   /// BA variables.

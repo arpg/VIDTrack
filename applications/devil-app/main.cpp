@@ -18,6 +18,7 @@
 
 #include <unistd.h>
 #include <deque>
+#include <fstream>
 
 #include <Eigen/Eigen>
 #include <sophus/sophus.hpp>
@@ -61,7 +62,11 @@
 
 /////////////////////////////////////////////////////////////////////////////
 devil::Tracker                                    dvi_track(10, 4);
-std::mutex                                        imu_mutex;
+
+/////////////////////////////////////////////////////////////////////////////
+/// IMU Variables.
+const size_t    filter_size = 0;
+std::deque<std::tuple<Eigen::Vector3d, Eigen::Vector3d, double> >   filter;
 
 void IMU_Handler(pb::ImuMsg& IMUdata) {
   Eigen::Vector3d a(IMUdata.accel().data(0),
@@ -71,9 +76,38 @@ void IMU_Handler(pb::ImuMsg& IMUdata) {
                     IMUdata.gyro().data(1),
                     IMUdata.gyro().data(2));
 
-//  imu_mutex.lock();
-  dvi_track.AddInertialMeasurement(a, w, IMUdata.system_time());
-//  imu_mutex.unlock();
+
+  // If filter is used...
+  if (filter_size > 0) {
+    filter.push_back(std::make_tuple(a, w, IMUdata.system_time()));
+
+    // If filter is full, start using it.
+    if (filter.size() == filter_size) {
+      // Average variables.
+      double          at = 0;
+      Eigen::Vector3d aa, aw;
+      aa.setZero(); aw.setZero();
+
+      // Average.
+      for (size_t ii = 0; ii < filter_size; ++ii) {
+        aa += std::get<0>(filter[ii]);
+        aw += std::get<1>(filter[ii]);
+        at += std::get<2>(filter[ii]);
+      }
+      aa /= filter_size;
+      aw /= filter_size;
+      at /= filter_size;
+
+      // Push filtered IMU data to BA.
+      dvi_track.AddInertialMeasurement(aa, aw, at);
+
+      // Pop oldest measurement.
+      filter.pop_front();
+    }
+  } else {
+    // Push IMU data to BA.
+    dvi_track.AddInertialMeasurement(a, w, IMUdata.system_time());
+  }
 }
 
 
@@ -84,8 +118,10 @@ int main(int argc, char** argv)
 {
   std::cout << "Starting DEVIL ..." << std::endl;
 
-  ///----- Initialize Camera.
   GetPot cl_args(argc, argv);
+  const int frame_skip = cl_args.follow(0, "-skip");
+
+  ///----- Initialize Camera.
   if (!cl_args.search("-cam")) {
     std::cerr << "Camera arguments missing!" << std::endl;
     exit(EXIT_FAILURE);
@@ -117,28 +153,28 @@ int main(int argc, char** argv)
   pangolin::Var<bool>           ui_camera_follow("ui.Camera Follow", false, true);
   pangolin::Var<bool>           ui_reset("ui.Reset", true, false);
   pangolin::Var<bool>           ui_show_vo_path("ui.Show VO Path", true, true);
-  pangolin::Var<bool>           ui_show_ba_path("ui.Show BA Path", true, true);
+  pangolin::Var<bool>           ui_show_ba_path("ui.Show BA Path", false, true);
   pangolin::Var<bool>           ui_show_ba_rel_path("ui.Show BA Rel Path", true, true);
-  pangolin::Var<bool>           ui_show_ba_win_path("ui.Show BA Win Path", true, true);
+  pangolin::Var<bool>           ui_show_ba_win_path("ui.Show BA Win Path", false, true);
   pangolin::Var<bool>           ui_show_gt_path("ui.Show GT Path", true, true);
 
   // Set up container.
   pangolin::View& container = pangolin::CreateDisplay();
-  container.SetBounds(0, 1, pangolin::Attach::Pix(panel_size), 0.65);
+  container.SetBounds(0, 1, pangolin::Attach::Pix(panel_size), 0.75);
   container.SetLayout(pangolin::LayoutEqual);
   pangolin::DisplayBase().AddDisplay(container);
 
   // Set up timer.
   Timer     timer;
   TimerView timer_view;
-  timer_view.SetBounds(0.5, 1, 0.65, 1.0);
+  timer_view.SetBounds(0.5, 1, 0.75, 1.0);
   pangolin::DisplayBase().AddDisplay(timer_view);
   timer_view.InitReset();
 
   // Set up analytics.
   std::map<std::string, float>  analytics;
   AnalyticsView                 analytics_view;
-  analytics_view.SetBounds(0, 0.5, 0.65, 1.0);
+  analytics_view.SetBounds(0, 0.5, 0.75, 1.0);
   pangolin::DisplayBase().AddDisplay(analytics_view);
   analytics_view.InitReset();
 
@@ -204,7 +240,6 @@ int main(int argc, char** argv)
   bool capture_flag = false;
   bool paused       = true;
   bool step_once    = false;
-  bool run_batch_ba = false;
 
 
   ///----- Load camera model.
@@ -228,73 +263,76 @@ int main(int argc, char** argv)
   ///----- DTrack aux variables.
   cv::Mat keyframe_image, keyframe_depth;
 
-  ///----- Load file of ground truth poses (required).
+  ///----- Load file of ground truth poses (optional).
+  bool have_gt;
   std::vector<Sophus::SE3d> poses;
   {
     std::string pose_file = cl_args.follow("", "-poses");
     if (pose_file.empty()) {
-      std::cerr << "- NOTE: No poses file given. It is required!" << std::endl;
-      exit(EXIT_FAILURE);
-    }
-    pose_file = camera.GetDeviceProperty(hal::DeviceDirectory) + "/" + pose_file;
-    FILE* fd = fopen(pose_file.c_str(), "r");
-    Eigen::Matrix<double, 6, 1> pose;
-    float x, y, z, p, q, r;
-
-    std::cout << "- Loading pose file: '" << pose_file << "'" << std::endl;
-    if (cl_args.search("-V")) {
-      // Vision convention.
-      std::cout << "- NOTE: File is being read in VISION frame." << std::endl;
-    } else if (cl_args.search("-C")) {
-      // Custom convention.
-      std::cout << "- NOTE: File is being read in *****CUSTOM***** frame." << std::endl;
-    } else if (cl_args.search("-T")) {
-      // Tsukuba convention.
-      std::cout << "- NOTE: File is being read in TSUKUBA frame." << std::endl;
+      std::cerr << "- NOTE: No poses file given. Not comparing against ground truth!" << std::endl;
+      have_gt = false;
+      ui_show_gt_path = false;
     } else {
-      // Robotics convention (default).
-      std::cout << "- NOTE: File is being read in ROBOTICS frame." << std::endl;
-    }
+      pose_file = camera.GetDeviceProperty(hal::DeviceDirectory) + "/" + pose_file;
+      FILE* fd = fopen(pose_file.c_str(), "r");
+      Eigen::Matrix<double, 6, 1> pose;
+      float x, y, z, p, q, r;
 
-    while (fscanf(fd, "%f\t%f\t%f\t%f\t%f\t%f", &x, &y, &z, &p, &q, &r) != EOF) {
-      pose(0) = x;
-      pose(1) = y;
-      pose(2) = z;
-      pose(3) = p;
-      pose(4) = q;
-      pose(5) = r;
-
-      Sophus::SE3d T(SceneGraph::GLCart2T(pose));
-
-      // Flag to load poses as a particular convention.
+      std::cout << "- Loading pose file: '" << pose_file << "'" << std::endl;
       if (cl_args.search("-V")) {
         // Vision convention.
-        poses.push_back(T);
+        std::cout << "- NOTE: File is being read in VISION frame." << std::endl;
       } else if (cl_args.search("-C")) {
-        // Custom setting.
-        pose(0) *= -1;
-        pose(2) *= -1;
-        Sophus::SE3d Tt(SceneGraph::GLCart2T(pose));
-//        poses.push_back(Tt);
-        poses.push_back(calibu::ToCoordinateConvention(Tt,
-                                                       calibu::RdfRobotics));
+        // Custom convention.
+        std::cout << "- NOTE: File is being read in *****CUSTOM***** frame." << std::endl;
       } else if (cl_args.search("-T")) {
         // Tsukuba convention.
-        Eigen::Matrix3d tsukuba_convention;
-        tsukuba_convention << -1,  0,  0,
-                               0, -1,  0,
-                               0,  0, -1;
-        Sophus::SO3d tsukuba_convention_sophus(tsukuba_convention);
-        poses.push_back(calibu::ToCoordinateConvention(T,
-                                        tsukuba_convention_sophus.inverse()));
+        std::cout << "- NOTE: File is being read in TSUKUBA frame." << std::endl;
       } else {
         // Robotics convention (default).
-        poses.push_back(calibu::ToCoordinateConvention(T,
-                                        calibu::RdfRobotics));
+        std::cout << "- NOTE: File is being read in ROBOTICS frame." << std::endl;
       }
+
+      while (fscanf(fd, "%f\t%f\t%f\t%f\t%f\t%f", &x, &y, &z, &p, &q, &r) != EOF) {
+        pose(0) = x;
+        pose(1) = y;
+        pose(2) = z;
+        pose(3) = p;
+        pose(4) = q;
+        pose(5) = r;
+
+        Sophus::SE3d T(SceneGraph::GLCart2T(pose));
+
+        // Flag to load poses as a particular convention.
+        if (cl_args.search("-V")) {
+          // Vision convention.
+          poses.push_back(T);
+        } else if (cl_args.search("-C")) {
+          // Custom setting.
+          pose(0) *= -1;
+          pose(2) *= -1;
+          Sophus::SE3d Tt(SceneGraph::GLCart2T(pose));
+          poses.push_back(calibu::ToCoordinateConvention(Tt,
+                                                         calibu::RdfRobotics));
+        } else if (cl_args.search("-T")) {
+          // Tsukuba convention.
+          Eigen::Matrix3d tsukuba_convention;
+          tsukuba_convention << -1,  0,  0,
+                                 0, -1,  0,
+                                 0,  0, -1;
+          Sophus::SO3d tsukuba_convention_sophus(tsukuba_convention);
+          poses.push_back(calibu::ToCoordinateConvention(T,
+                                          tsukuba_convention_sophus.inverse()));
+        } else {
+          // Robotics convention (default).
+          poses.push_back(calibu::ToCoordinateConvention(T,
+                                          calibu::RdfRobotics));
+        }
+      }
+      std::cout << "- NOTE: " << poses.size() << " poses loaded." << std::endl;
+      fclose(fd);
+      have_gt = true;
     }
-    std::cout << "- NOTE: " << poses.size() << " poses loaded." << std::endl;
-    fclose(fd);
   }
 
   ///----- Register callbacks.
@@ -303,7 +341,7 @@ int main(int argc, char** argv)
     static bool fullscreen = true;
     fullscreen = !fullscreen;
     if (fullscreen) {
-      container.SetBounds(0, 1, pangolin::Attach::Pix(panel_size), 0.65);
+      container.SetBounds(0, 1, pangolin::Attach::Pix(panel_size), 0.75);
     } else {
       container.SetBounds(0, 1, 0, 1);
     }
@@ -329,20 +367,25 @@ int main(int argc, char** argv)
   pangolin::RegisterKeyPressCallback(pangolin::PANGO_CTRL + 'r',
                                      [&ui_reset] {
                                         ui_reset = true; });
-  pangolin::RegisterKeyPressCallback('o',
-                                     [&run_batch_ba] {
-                                        run_batch_ba = !run_batch_ba; });
 
   ///----- Init general variables.
   unsigned int                      frame_index;
   Sophus::SE3d                      vo_pose;
-  Sophus::SE3d                      accum_rel_pose;
-  Sophus::SE3d                      current_pose;
-  double                            current_timestamp;
+  Sophus::SE3d                      ba_accum_rel_pose;
+  Sophus::SE3d                      ba_global_pose;
   double                            keyframe_timestamp;
+
+  // IMU-Camera transform through robotic to vision conversion.
+  Sophus::SE3d Trv;
+  Trv.so3() = calibu::RdfRobotics;
+  Sophus::SE3d Tic = rig.t_wc_[0] * Trv;
 
   // Image holder.
   std::shared_ptr<pb::ImageArray> images = pb::ImageArray::Create();
+
+  // Open file for saving poses.
+  std::ofstream output_file;
+  output_file.open("poses.txt");
 
   /////////////////////////////////////////////////////////////////////////////
   ///---- MAIN LOOP
@@ -370,12 +413,24 @@ int main(int argc, char** argv)
 
       // Reset map and current pose.
       vo_pose = Sophus::SE3d();
-      accum_rel_pose = Sophus::SE3d();
-      current_pose = Sophus::SE3d();
-      path_ba_vec.push_back(current_pose);
-      path_gt_vec.push_back(poses[0].inverse() * poses[frame_index]);
+      ba_global_pose = Sophus::SE3d();
+      ba_accum_rel_pose = Sophus::SE3d();
+      path_vo_vec.push_back(vo_pose);
+      path_ba_vec.push_back(ba_global_pose);
+      path_ba_rel_vec.push_back(ba_accum_rel_pose);
+      if (have_gt) {
+        path_gt_vec.push_back(poses[0].inverse() * poses[frame_index]);
+      }
+
+      // Save first pose.
+      output_file << SceneGraph::GLT2Cart(ba_accum_rel_pose.matrix()).transpose()
+                  << std::endl;
 
       // Capture first image.
+      for (size_t ii = 0; ii < filter_size; ++ii) {
+        capture_flag = camera.Capture(*images);
+        usleep(100);
+      }
       capture_flag = camera.Capture(*images);
       cv::Mat current_image = devil::ConvertAndNormalize(images->at(0)->Mat());
 
@@ -399,6 +454,10 @@ int main(int argc, char** argv)
     ///----- Step forward ...
     if (!paused || pangolin::Pushed(step_once)) {
       //  Capture the new image.
+      for (int ii = 0; ii < frame_skip; ++ii) {
+        capture_flag = camera.Capture(*images);
+        usleep(100);
+      }
       capture_flag = camera.Capture(*images);
 
       if (capture_flag == false) {
@@ -406,42 +465,52 @@ int main(int argc, char** argv)
       } else {
         // Convert to float and normalize.
         cv::Mat current_image = devil::ConvertAndNormalize(images->at(0)->Mat());
-        current_timestamp = images->at(0)->Timestamp();
+        const double current_timestamp = images->at(0)->Timestamp();
 
         // Get pose for this image.
         timer.Tic("DEVIL");
         Sophus::SE3d rel_pose, vo;
         dvi_track.Estimate(current_image, images->at(1)->Mat(),
-                           current_timestamp, current_pose, rel_pose, vo);
-        accum_rel_pose *= rel_pose;
+                           current_timestamp, ba_global_pose, rel_pose, vo);
+
+        // Uncomment this if poses are to be seen in vision and camera frame.
+        ba_accum_rel_pose *= Tic.inverse() * rel_pose * Tic;
+        // Uncomment this for regular robotic IMU frame.
+//        ba_accum_rel_pose *= rel_pose;
+
         vo_pose *= vo;
         timer.Toc("DEVIL");
 
+        // Save poses.
+        Eigen::Vector6d tmp = SceneGraph::GLT2Cart(ba_accum_rel_pose.matrix());
+        output_file << tmp.transpose() << std::endl;
 
         ///----- Update GUI objects.
         // Update poses.
-        Sophus::SE3d gt_pose = (poses[0].inverse() * poses[frame_index]);
-
-        // Update error.
-        analytics["Path Error"] =
-            Sophus::SE3::log(current_pose.inverse() * gt_pose).head(3).norm();
-        analytics["Path Rel Error"] =
-            Sophus::SE3::log(accum_rel_pose.inverse() * gt_pose).head(3).norm();
-        analytics["Path VO Error"] =
-            Sophus::SE3::log(vo_pose.inverse() * gt_pose).head(3).norm();
+        if (have_gt) {
+          Sophus::SE3d gt_pose = (poses[0].inverse() * poses[frame_index]);
+          // Update errors.
+          analytics["BA Global Path Error"] =
+              Sophus::SE3::log(ba_global_pose.inverse() * gt_pose).head(3).norm();
+          analytics["BA Rel Path Error"] =
+              Sophus::SE3::log(ba_accum_rel_pose.inverse() * gt_pose).head(3).norm();
+          analytics["VO Path Error"] =
+              Sophus::SE3::log(vo_pose.inverse() * gt_pose).head(3).norm();
+        }
 
         // Reset reference image for DTrack.
         keyframe_image = current_image;
         keyframe_depth = images->at(1)->Mat();
         cv::Mat maskNAN = cv::Mat(keyframe_depth != keyframe_depth);
         keyframe_depth.setTo(0, maskNAN);
-        keyframe_timestamp = current_timestamp;
 
         // Update path.
         path_vo_vec.push_back(vo_pose);
-        path_ba_vec.push_back(current_pose);
-        path_ba_rel_vec.push_back(accum_rel_pose);
-        path_gt_vec.push_back(poses[0].inverse()*poses[frame_index]);
+        path_ba_vec.push_back(ba_global_pose);
+        path_ba_rel_vec.push_back(ba_accum_rel_pose);
+        if (have_gt) {
+          path_gt_vec.push_back(poses[0].inverse()*poses[frame_index]);
+        }
         path_ba_win_vec.clear();
         const std::deque<ba::PoseT<double> > ba_poses = dvi_track.GetAdjustedPoses();
         for (size_t ii = 0; ii < ba_poses.size(); ++ii) {
@@ -470,7 +539,7 @@ int main(int argc, char** argv)
     }
 
     if (ui_camera_follow) {
-      stacks3d.Follow(current_pose.matrix());
+      stacks3d.Follow(ba_accum_rel_pose.matrix());
     }
 
     gl_path_vo.SetVisible(ui_show_vo_path);
