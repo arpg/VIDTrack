@@ -61,7 +61,7 @@
 
 
 /////////////////////////////////////////////////////////////////////////////
-devil::Tracker                                    dvi_track(10, 5);
+devil::Tracker                                    dvi_track(10, 4);
 
 /////////////////////////////////////////////////////////////////////////////
 /// IMU Variables.
@@ -484,6 +484,7 @@ int main(int argc, char** argv)
         // Save poses.
         Eigen::Vector6d tmp = SceneGraph::GLT2Cart(ba_accum_rel_pose.matrix());
         output_file << tmp.transpose() << std::endl;
+        std::cout << "Global Pose: " << std::endl << tmp.transpose() << std::endl;
 
         ///----- Update GUI objects.
         // Update poses.

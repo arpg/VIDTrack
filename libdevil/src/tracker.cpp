@@ -165,7 +165,8 @@ void Tracker::ConfigureBA(const calibu::CameraRig& rig,
     // Set gravity.
     Eigen::Matrix<double, 3, 1> gravity;
 //    gravity << 0, 0, 9.806; // PathGen
-    gravity << 0, 0, -9.806; // Rig
+//    gravity << 0, 0, -9.806; // Rig
+    gravity << 0, -9.806, 0; // CityBlock
     bundle_adjuster_.SetGravity(gravity);
 
     // Set up BA options.
@@ -202,7 +203,7 @@ void Tracker::Estimate(
   /// If BA has converged, integrate IMU measurements (if available) instead
   /// of doing full pyramid.
   bool use_pyramid = true;
-  if (ba_has_converged_ && false) {
+  if (ba_has_converged_) {
     // Get IMU measurements between keyframe and current frame.
     CHECK_LT(current_time_, time);
     std::vector<ImuMeasurement> imu_measurements =

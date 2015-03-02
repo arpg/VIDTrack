@@ -433,18 +433,18 @@ double DTrack::Estimate(
   const float  max_depth         = 100.0;
 
   // Set pyramid max-iterations and full estimate mask.
-  std::vector<bool>         vec_full_estimate  = {1, 1, 1, 1, 0};
+  std::vector<bool>         vec_full_estimate  = {1, 1, 1, 0};
 #if DECIMATE
-  std::vector<unsigned int> vec_max_iterations = {0, 3, 3, 4};
+  std::vector<unsigned int> vec_max_iterations = {0, 5, 5, 5};
 #else
-  std::vector<unsigned int> vec_max_iterations = {3, 3, 3, 4, 5};
+  std::vector<unsigned int> vec_max_iterations = {5, 5, 5, 5};
 #endif
 
   if (use_pyramid == false) {
 #if DECIMATE
-    vec_max_iterations = {0, 3, 0, 0, 0};
+    vec_max_iterations = {0, 5, 0, 0};
 #else
-    vec_max_iterations = {3, 0, 0, 0, 0};
+    vec_max_iterations = {5, 0, 0, 0};
 #endif
   }
 
