@@ -166,8 +166,8 @@ public:
   const unsigned int kMinWindowSize;
   const unsigned int kPyramidLevels;
 
-//  const double       kTimeOffset = 0.0;
-  const double       kTimeOffset = -0.00195049; // Old
+  const double       kTimeOffset = 0.0;
+//  const double       kTimeOffset = -0.00195049; // Old
 //  const double       kTimeOffset = -0.00490676; // New
 
 private:

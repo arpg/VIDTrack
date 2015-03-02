@@ -31,7 +31,7 @@ inline float interp(
 {
   if (!((x >= 0) && (y >= 0) && (x <= image_width-2)
         && (y <= image_height-2))) {
-    LOG(ERROR) << "Bad point: " << x << ", " << y;
+    LOG(FATAL) << "Bad point: " << x << ", " << y;
   }
 
   x = std::max(std::min(x, static_cast<float>(image_width)-2.0f), 2.0f);
@@ -71,6 +71,7 @@ public:
   ///////////////////////////////////////////////////////////////////////////
   PoseRefine(
       const cv::Mat&           live_grey,
+      const cv::Mat&           live_depth,
       const cv::Mat&           ref_grey,
       const cv::Mat&           ref_depth,
       const Eigen::Matrix3d&   Klg,
@@ -87,6 +88,7 @@ public:
     error(0),
     num_obs(0),
     live_grey_(live_grey),
+    live_depth_(live_depth),
     ref_grey_(ref_grey),
     ref_depth_(ref_depth),
     Klg_(Klg),
@@ -113,6 +115,7 @@ public:
     error(0),
     num_obs(0),
     live_grey_(x.live_grey_),
+    live_depth_(x.live_depth_),
     ref_grey_(x.ref_grey_),
     ref_depth_(x.ref_depth_),
     Klg_(x.Klg_),
@@ -208,8 +211,33 @@ public:
         }
       }
 
-      // Calculate error.
+      // Calculate photometric error.
       const double y = Il-Ir;
+
+      /*
+      // Calculate depth error.
+      const float Dl =
+          interp(pl_g(0), pl_g(1),
+                 reinterpret_cast<float*>(live_depth_.data), live_depth_.cols,
+                 live_depth_.rows);
+      const float Dr_warped = hPl_g(2);
+
+      // Regularized error.
+      double y_reg =  y;
+      if (regularize) {
+      const double y_reg = y + fabs(Dl-Dr_warped);
+      }
+
+      if (u == 10 && v == 10) {
+        std::cout << "Img Width: " << live_depth_.cols << std::endl;
+        std::cout << "Original Depth: " << depth << std::endl;
+        std::cout << "Depth Warped: " << Dr_warped << std::endl;
+        std::cout << "Depth Live: " << Dl << std::endl;
+        std::cout << "Reporjected Pix: " << pl_g.transpose() << std::endl;
+        std::cout << "Depth at Pix: " << live_depth_.at<float>(pl_g(0), pl_g(1)) << std::endl;
+        std::cout << "Depth Error: " << fabs(Dl-Dr_warped) << std::endl;
+      }
+      */
 
 
       ///-------------------- Forward Compositional
@@ -258,7 +286,6 @@ public:
       dIr << (Ir_xr-Ir_xl)/2.0, (Ir_yd-Ir_yu)/2.0;
 
 
-
       // Projection & dehomogenization derivative.
       Eigen::Vector3d KlPl = Klg_*hPl_g.head(3);
 
@@ -281,6 +308,7 @@ public:
 
       ///-------------------- Robust Norm
       const double w = _NormTukey(y, norm_param_);
+//      const double w = 1.0;
 
       hessian     += J.transpose() * w * J;
       LHS         += J.transpose() * w * J;
@@ -324,6 +352,7 @@ public:
 
 private:
   cv::Mat           live_grey_;
+  cv::Mat           live_depth_;
   cv::Mat           ref_grey_;
   cv::Mat           ref_depth_;
   Eigen::Matrix3d   Klg_;
@@ -384,27 +413,39 @@ void DTrack::SetKeyframe(
   cv::buildPyramid(ref_depth, ref_depth_pyramid_, kPyramidLevels);
 }
 
+#define DECIMATE 0
+
 ///////////////////////////////////////////////////////////////////////////
 double DTrack::Estimate(
     const cv::Mat&            live_grey,    // Input: Live image (float format, normalized).
     Sophus::SE3Group<double>& Trl,          // Input/Output: Transform between grey cameras (input is hint).
     Eigen::Matrix6d&          covariance,   // Output: Covariance
-    bool                      use_pyramid   // Input: Options.
+    bool                      use_pyramid,   // Input: Options.
+    const cv::Mat&            live_depth
     )
 {
   // TODO(jfalquez) Pass this options in Config method to avoid re-initializing.
   // Options.
   const double norm_c            = 0.04;
+  const double norm_cd           = 0.20;
   const bool   discard_saturated = true;
   const float  min_depth         = 0.01;
   const float  max_depth         = 100.0;
 
   // Set pyramid max-iterations and full estimate mask.
-  std::vector<bool>         vec_full_estimate  = {1, 1, 1, 0};
-  std::vector<unsigned int> vec_max_iterations = {3, 3, 3, 4};
+  std::vector<bool>         vec_full_estimate  = {1, 1, 1, 1, 0};
+#if DECIMATE
+  std::vector<unsigned int> vec_max_iterations = {0, 3, 3, 4};
+#else
+  std::vector<unsigned int> vec_max_iterations = {3, 3, 3, 4, 5};
+#endif
 
   if (use_pyramid == false) {
-    vec_max_iterations = {3, 0, 0, 0};
+#if DECIMATE
+    vec_max_iterations = {0, 3, 0, 0, 0};
+#else
+    vec_max_iterations = {3, 0, 0, 0, 0};
+#endif
   }
 
   CHECK_EQ(vec_full_estimate.size(), kPyramidLevels);
@@ -416,6 +457,7 @@ double DTrack::Estimate(
                                  reinterpret_cast<float*>(ref_grey_pyramid_[0].data),
                                  live_grey_copy.cols*live_grey_copy.rows);
   cv::buildPyramid(live_grey_copy, live_grey_pyramid_, kPyramidLevels);
+  cv::buildPyramid(live_depth, live_depth_pyramid_, kPyramidLevels);
 
   // Aux variables.
   Eigen::Matrix6d   hessian;
@@ -428,6 +470,7 @@ double DTrack::Estimate(
   // Iterate through pyramid levels.
   for (int pyramid_lvl = kPyramidLevels-1; pyramid_lvl >= 0; pyramid_lvl--) {
     const cv::Mat& live_grey_img = live_grey_pyramid_[pyramid_lvl];
+    const cv::Mat& live_depth_img = live_depth_pyramid_[pyramid_lvl];
     const cv::Mat& ref_grey_img  = ref_grey_pyramid_[pyramid_lvl];
     const cv::Mat& ref_depth_img = ref_depth_pyramid_[pyramid_lvl];
 
@@ -443,6 +486,7 @@ double DTrack::Estimate(
 
     // Set pyramid norm parameter.
     const double norm_c_pyr = norm_c*(pyramid_lvl+1);
+    const double norm_cd_pyr = norm_cd*(pyramid_lvl+1);
 
     for (unsigned int num_iters = 0; num_iters < vec_max_iterations[pyramid_lvl]; ++num_iters) {
       // Reset.
@@ -464,7 +508,7 @@ double DTrack::Estimate(
       const Eigen::Matrix3x4d KlgTlr = Klg*Tlr.matrix3x4();
 
       // Launch TBB.
-      PoseRefine pose_ref(live_grey_img, ref_grey_img, ref_depth_img, Klg,
+      PoseRefine pose_ref(live_grey_img, live_depth_img, ref_grey_img, ref_depth_img, Klg,
                           Krg, Krd, Tgd_.matrix(), Tlr.matrix(), KlgTlr,
                           norm_c_pyr, discard_saturated, min_depth, max_depth);
 
@@ -477,7 +521,11 @@ double DTrack::Estimate(
       number_observations  = pose_ref.num_obs;
 
       // Store Hessian.
+#if DECIMATE
+      if (pyramid_lvl == 1) {
+#else
       if (pyramid_lvl == 0) {
+#endif
         hessian = pose_ref.hessian;
       }
 
@@ -542,7 +590,6 @@ double DTrack::Estimate(
 
   // Set covariance output.
   covariance = hessian.inverse();
-//  std::cout << "Covariance: " << std::endl << covariance << std::endl;
 
   return last_error;
 }

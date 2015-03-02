@@ -164,7 +164,6 @@ void Tracker::ConfigureBA(const calibu::CameraRig& rig,
 
     // Set gravity.
     Eigen::Matrix<double, 3, 1> gravity;
-//    gravity << 0, -9.806, 0; // CityBlock
 //    gravity << 0, 0, 9.806; // PathGen
     gravity << 0, 0, -9.806; // Rig
     bundle_adjuster_.SetGravity(gravity);
@@ -198,13 +197,12 @@ void Tracker::Estimate(
   time = time + kTimeOffset;
 
   Sophus::SE3d        rel_pose_estimate;
-  Eigen::Matrix6d     dtrack_covariance;
 
   ///--------------------
   /// If BA has converged, integrate IMU measurements (if available) instead
   /// of doing full pyramid.
   bool use_pyramid = true;
-  if (ba_has_converged_) {
+  if (ba_has_converged_ && false) {
     // Get IMU measurements between keyframe and current frame.
     CHECK_LT(current_time_, time);
     std::vector<ImuMeasurement> imu_measurements =
@@ -240,16 +238,18 @@ void Tracker::Estimate(
 
   ///--------------------
   /// RGBD pose estimation.
-  double dtrack_error;
+  double              dtrack_error;
+  Eigen::Matrix6d     dtrack_covariance;
+
   if (use_pyramid) {
     // TODO(jfalquez) If constant velocity model is to be used, this is the
     // place to add it before calling DTrack's estimate. Do not use it on the
     // else statement, since rel_pose_estimate should have IMU integration.
     dtrack_error = dtrack_.Estimate(grey_image, rel_pose_estimate,
-                                    dtrack_covariance, true);
+                                    dtrack_covariance, true, depth_image);
   } else {
     dtrack_error = dtrack_.Estimate(grey_image, rel_pose_estimate,
-                                    dtrack_covariance, false);
+                                    dtrack_covariance, false, depth_image);
   }
 
   // Transfer covariance to IMU frame.
@@ -261,10 +261,14 @@ void Tracker::Estimate(
 
   vo_pose = rel_pose_estimate;
 
+  // Adjust covariances.
+//  dtrack_covariance *= 1e-10;
+//  std::cout << "Covariance: " << std::endl << dtrack_covariance << std::endl;
+
   // Push pose estimate into DTrack window.
   DTrackPose dtrack_rel_pose;
   dtrack_rel_pose.T_ab        = rel_pose_estimate;
-  dtrack_rel_pose.covariance  = dtrack_covariance; // 10000;
+  dtrack_rel_pose.covariance  = dtrack_covariance;
   dtrack_rel_pose.time_a      = current_time_;
   dtrack_rel_pose.time_b      = time;
   dtrack_window_.push_back(dtrack_rel_pose);

@@ -61,7 +61,7 @@
 
 
 /////////////////////////////////////////////////////////////////////////////
-devil::Tracker                                    dvi_track(10, 4);
+devil::Tracker                                    dvi_track(10, 5);
 
 /////////////////////////////////////////////////////////////////////////////
 /// IMU Variables.
@@ -213,7 +213,7 @@ int main(int argc, char** argv)
   std::vector<Sophus::SE3d>& path_gt_vec = gl_path_gt.GetPathRef();
 
   // Add grid.
-  SceneGraph::GLGrid gl_grid(50, 1);
+  SceneGraph::GLGrid gl_grid(150, 1);
   gl_graph.AddChild(&gl_grid);
 
   pangolin::View view_3d;
@@ -474,9 +474,9 @@ int main(int argc, char** argv)
                            current_timestamp, ba_global_pose, rel_pose, vo);
 
         // Uncomment this if poses are to be seen in vision and camera frame.
-        ba_accum_rel_pose *= Tic.inverse() * rel_pose * Tic;
+//        ba_accum_rel_pose *= Tic.inverse() * rel_pose * Tic;
         // Uncomment this for regular robotic IMU frame.
-//        ba_accum_rel_pose *= rel_pose;
+        ba_accum_rel_pose *= rel_pose;
 
         vo_pose *= vo;
         timer.Toc("DEVIL");

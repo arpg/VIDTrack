@@ -75,8 +75,9 @@ public:
       const cv::Mat&            live_grey,          // Input: Live image (float format, normalized).
       Sophus::SE3Group<double>& Trl,                // Input/Output: Transform between grey cameras (vision frame/input is hint).
       Eigen::Matrix6d&          covariance,         // Output: Covariance
-      bool                      use_pyramid = true  // Input: Options.
-      );
+      bool                      use_pyramid,        // Input: Options.
+      const cv::Mat&            live_depth
+    );
 
 private:
   ///////////////////////////////////////////////////////////////////////////
@@ -101,6 +102,7 @@ public:
 private:
   tbb::task_scheduler_init                         tbb_scheduler_;
   std::vector<cv::Mat>                             live_grey_pyramid_;
+  std::vector<cv::Mat>                             live_depth_pyramid_;
   std::vector<cv::Mat>                             ref_grey_pyramid_;
   std::vector<cv::Mat>                             ref_depth_pyramid_;
   std::vector<calibu::CameraModelGeneric<double> > live_grey_cam_model_;
