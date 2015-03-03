@@ -308,7 +308,6 @@ public:
 
       ///-------------------- Robust Norm
       const double w = _NormTukey(y, norm_param_);
-//      const double w = 1.0;
 
       hessian     += J.transpose() * w * J;
       LHS         += J.transpose() * w * J;

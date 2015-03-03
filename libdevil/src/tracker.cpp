@@ -62,7 +62,7 @@ inline Eigen::Matrix<double, 6, 1> T2Cart(const Eigen::Matrix4d& T) {
 
 ///////////////////////////////////////////////////////////////////////////
 Tracker::Tracker(unsigned int window_size, unsigned int pyramid_levels)
-  : kWindowSize(window_size), kMinWindowSize(5), kPyramidLevels(pyramid_levels),
+  : kWindowSize(window_size), kMinWindowSize(10), kPyramidLevels(pyramid_levels),
     config_ba_(false), config_dtrack_(false), ba_has_converged_(false),
     dtrack_(pyramid_levels)
 {
@@ -164,9 +164,9 @@ void Tracker::ConfigureBA(const calibu::CameraRig& rig,
 
     // Set gravity.
     Eigen::Matrix<double, 3, 1> gravity;
+    gravity << 0, -9.806, 0; // CityBlock
 //    gravity << 0, 0, 9.806; // PathGen
 //    gravity << 0, 0, -9.806; // Rig
-    gravity << 0, -9.806, 0; // CityBlock
     bundle_adjuster_.SetGravity(gravity);
 
     // Set up BA options.
