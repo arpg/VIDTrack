@@ -203,7 +203,7 @@ void Tracker::Estimate(
   /// If BA has converged, integrate IMU measurements (if available) instead
   /// of doing full pyramid.
   bool use_pyramid = true;
-  if (ba_has_converged_) {
+  if (ba_has_converged_ && false) {
     // Get IMU measurements between keyframe and current frame.
     CHECK_LT(current_time_, time);
     std::vector<ImuMeasurement> imu_measurements =
@@ -239,6 +239,7 @@ void Tracker::Estimate(
 
   ///--------------------
   /// RGBD pose estimation.
+  unsigned int        dtrack_num_obs;
   double              dtrack_error;
   Eigen::Matrix6d     dtrack_covariance;
 
@@ -246,16 +247,21 @@ void Tracker::Estimate(
     // TODO(jfalquez) If constant velocity model is to be used, this is the
     // place to add it before calling DTrack's estimate. Do not use it on the
     // else statement, since rel_pose_estimate should have IMU integration.
-    dtrack_error = dtrack_.Estimate(grey_image, rel_pose_estimate,
-                                    dtrack_covariance, true, depth_image);
+    dtrack_error = dtrack_.Estimate(true, grey_image, rel_pose_estimate,
+                                    dtrack_covariance, dtrack_num_obs,
+                                    depth_image);
   } else {
-    dtrack_error = dtrack_.Estimate(grey_image, rel_pose_estimate,
-                                    dtrack_covariance, false, depth_image);
+    dtrack_error = dtrack_.Estimate(false, grey_image, rel_pose_estimate,
+                                    dtrack_covariance, dtrack_num_obs,
+                                    depth_image);
   }
 
+  LOG_IF(WARNING, dtrack_num_obs < (grey_image.cols*grey_image.rows*0.3))
+      << "Number of observations for DTrack is low!";
+
   // Transfer covariance to IMU frame.
-//  dtrack_covariance = rel_pose_estimate.Adj() * dtrack_covariance
-//      * rel_pose_estimate.Adj().inverse();
+//  dtrack_covariance = rel_pose_estimate.Adj().inverse() * dtrack_covariance
+//      * rel_pose_estimate.Adj();
 
   // Transfer relative pose to IMU frame.
   rel_pose_estimate = Tic_ * rel_pose_estimate * Tic_.inverse();
@@ -263,7 +269,7 @@ void Tracker::Estimate(
   vo_pose = rel_pose_estimate;
 
   // Adjust covariances.
-//  dtrack_covariance *= 1e-10;
+//  dtrack_covariance *= 1e-9;
 //  std::cout << "Covariance: " << std::endl << dtrack_covariance << std::endl;
 
   // Push pose estimate into DTrack window.
@@ -289,7 +295,7 @@ void Tracker::Estimate(
 
   ///--------------------
   /// Windowed BA.
-  if (dtrack_window_.size() >= kMinWindowSize) {
+  if (dtrack_window_.size() >= kMinWindowSize && false) {
     // Sanity check.
     CHECK_EQ(ba_window_.size(), dtrack_window_.size()+1)
         << "BA: " << ba_window_.size() << " DTrack: " << dtrack_window_.size();
@@ -391,9 +397,6 @@ void Tracker::AddInertialMeasurement(
     double                  time
     )
 {
-//  std::cout << "Accel: " << accel.transpose() << std::endl;
   ImuMeasurement imu(gyro, accel, time);
   imu_buffer_.AddElement(imu);
 }
-
-

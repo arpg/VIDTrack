@@ -61,14 +61,13 @@
 
 
 /////////////////////////////////////////////////////////////////////////////
-devil::Tracker                                    dvi_track(15, 4);
 
 /////////////////////////////////////////////////////////////////////////////
 /// IMU Variables.
 const size_t    filter_size = 0;
 std::deque<std::tuple<Eigen::Vector3d, Eigen::Vector3d, double> >   filter;
 
-void IMU_Handler(pb::ImuMsg& IMUdata) {
+void IMU_Handler(pb::ImuMsg& IMUdata, devil::Tracker* dvi_track) {
   Eigen::Vector3d a(IMUdata.accel().data(0),
                     IMUdata.accel().data(1),
                     IMUdata.accel().data(2));
@@ -99,14 +98,14 @@ void IMU_Handler(pb::ImuMsg& IMUdata) {
       at /= filter_size;
 
       // Push filtered IMU data to BA.
-      dvi_track.AddInertialMeasurement(aa, aw, at);
+      dvi_track->AddInertialMeasurement(aa, aw, at);
 
       // Pop oldest measurement.
       filter.pop_front();
     }
   } else {
     // Push IMU data to BA.
-    dvi_track.AddInertialMeasurement(a, w, IMUdata.system_time());
+    dvi_track->AddInertialMeasurement(a, w, IMUdata.system_time());
   }
 }
 
@@ -117,6 +116,7 @@ void IMU_Handler(pb::ImuMsg& IMUdata) {
 int main(int argc, char** argv)
 {
   std::cout << "Starting DEVIL ..." << std::endl;
+  devil::Tracker dvi_track(15, 4);
 
   GetPot cl_args(argc, argv);
   const int frame_skip = cl_args.follow(0, "-skip");
@@ -140,7 +140,10 @@ int main(int argc, char** argv)
     exit(EXIT_FAILURE);
   }
   hal::IMU imu(cl_args.follow("", "-imu"));
-  imu.RegisterIMUDataCallback(&IMU_Handler);
+  using std::placeholders::_1;
+  std::function<void (pb::ImuMsg&)> callback
+                    = std::bind(IMU_Handler, _1, &dvi_track);
+  imu.RegisterIMUDataCallback(callback);
   std::cout << "- Registering IMU device." << std::endl;
 
 
@@ -261,7 +264,8 @@ int main(int argc, char** argv)
   calibu::CreateFromOldRig(&old_rig, &rig);
 
   ///----- DTrack aux variables.
-  cv::Mat keyframe_image, keyframe_depth;
+  double  current_time;
+  cv::Mat current_image, current_depth;
 
   ///----- Load file of ground truth poses (optional).
   bool have_gt;
@@ -373,7 +377,6 @@ int main(int argc, char** argv)
   Sophus::SE3d                      vo_pose;
   Sophus::SE3d                      ba_accum_rel_pose;
   Sophus::SE3d                      ba_global_pose;
-  double                            keyframe_timestamp;
 
   // IMU-Camera transform through robotic to vision conversion.
   Sophus::SE3d Trv;
@@ -432,19 +435,18 @@ int main(int argc, char** argv)
         usleep(100);
       }
       capture_flag = camera.Capture(*images);
-      cv::Mat current_image = devil::ConvertAndNormalize(images->at(0)->Mat());
 
       // Reset reference image for DTrack.
-      keyframe_image = current_image;
-      keyframe_depth = images->at(1)->Mat();
-      cv::Mat maskNAN = cv::Mat(keyframe_depth != keyframe_depth);
-      keyframe_depth.setTo(0, maskNAN);
-      keyframe_timestamp = images->at(0)->Timestamp();
+      current_image = devil::ConvertAndNormalize(images->at(0)->Mat());
+      current_depth = images->at(1)->Mat();
+      cv::Mat maskNAN = cv::Mat(current_depth != current_depth);
+      current_depth.setTo(0, maskNAN);
+      current_time = images->at(0)->Timestamp();
 
       // Init DEVIL.
       dvi_track.ConfigureBA(old_rig);
-      dvi_track.ConfigureDTrack(keyframe_image, keyframe_depth,
-                                keyframe_timestamp, old_rig.cameras[0].camera);
+      dvi_track.ConfigureDTrack(current_image, current_depth,
+                                current_time, old_rig.cameras[0].camera);
 
       // Increment frame counter.
       frame_index++;
@@ -464,14 +466,17 @@ int main(int argc, char** argv)
         paused = true;
       } else {
         // Convert to float and normalize.
-        cv::Mat current_image = devil::ConvertAndNormalize(images->at(0)->Mat());
-        const double current_timestamp = images->at(0)->Timestamp();
+        current_image = devil::ConvertAndNormalize(images->at(0)->Mat());
+        current_depth = images->at(1)->Mat();
+        cv::Mat maskNAN = cv::Mat(current_depth != current_depth);
+        current_depth.setTo(0, maskNAN);
+        current_time = images->at(0)->Timestamp();
 
         // Get pose for this image.
         timer.Tic("DEVIL");
         Sophus::SE3d rel_pose, vo;
-        dvi_track.Estimate(current_image, images->at(1)->Mat(),
-                           current_timestamp, ba_global_pose, rel_pose, vo);
+        dvi_track.Estimate(current_image, current_depth,
+                           current_time, ba_global_pose, rel_pose, vo);
 
         // Uncomment this if poses are to be seen in vision and camera frame.
 //        ba_accum_rel_pose *= Tic.inverse() * rel_pose * Tic;
@@ -484,7 +489,7 @@ int main(int argc, char** argv)
         // Save poses.
         Eigen::Vector6d tmp = SceneGraph::GLT2Cart(ba_accum_rel_pose.matrix());
         output_file << tmp.transpose() << std::endl;
-        std::cout << "Global Pose: " << std::endl << tmp.transpose() << std::endl;
+//        std::cout << "Global Pose: " << std::endl << tmp.transpose() << std::endl;
 
         ///----- Update GUI objects.
         // Update poses.
@@ -498,12 +503,6 @@ int main(int argc, char** argv)
           analytics["VO Path Error"] =
               Sophus::SE3::log(vo_pose.inverse() * gt_pose).head(3).norm();
         }
-
-        // Reset reference image for DTrack.
-        keyframe_image = current_image;
-        keyframe_depth = images->at(1)->Mat();
-        cv::Mat maskNAN = cv::Mat(keyframe_depth != keyframe_depth);
-        keyframe_depth.setTo(0, maskNAN);
 
         // Update path.
         path_vo_vec.push_back(vo_pose);
@@ -550,7 +549,7 @@ int main(int argc, char** argv)
     gl_path_gt.SetVisible(ui_show_gt_path);
 
 
-#if 1
+#if 0
     // Update path using NIMA's code.
     {
       const std::vector<uint32_t>& imu_residual_ids = dvi_track.GetImuResidualIds();

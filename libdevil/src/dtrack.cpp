@@ -416,20 +416,25 @@ void DTrack::SetKeyframe(
 
 ///////////////////////////////////////////////////////////////////////////
 double DTrack::Estimate(
-    const cv::Mat&            live_grey,    // Input: Live image (float format, normalized).
-    Sophus::SE3Group<double>& Trl,          // Input/Output: Transform between grey cameras (input is hint).
-    Eigen::Matrix6d&          covariance,   // Output: Covariance
-    bool                      use_pyramid,   // Input: Options.
+    bool                      use_pyramid,
+    const cv::Mat&            live_grey,
+    Sophus::SE3Group<double>& Trl,
+    Eigen::Matrix6d&          covariance,
+    unsigned int&             num_obs,
     const cv::Mat&            live_depth
-    )
+  )
 {
+  // Reset output parameters.
+  num_obs = 0;
+  covariance.setZero();
+
   // TODO(jfalquez) Pass this options in Config method to avoid re-initializing.
   // Options.
   const double norm_c            = 0.04;
   const double norm_cd           = 0.20;
   const bool   discard_saturated = true;
   const float  min_depth         = 0.01;
-  const float  max_depth         = 100.0;
+  const float  max_depth         = 30.0;
 
   // Set pyramid max-iterations and full estimate mask.
   std::vector<bool>         vec_full_estimate  = {1, 1, 1, 0};
@@ -571,6 +576,9 @@ double DTrack::Estimate(
         // Update error.
         last_error = new_error;
 
+        // Update number of observations used in estimation.
+        num_obs = number_observations;
+
         // Update Trl.
         Trl = (Tlr*Sophus::SE3Group<double>::exp(X)).inverse();
 
@@ -598,7 +606,7 @@ double DTrack::Estimate(
 inline calibu::CameraModelGeneric<double> DTrack::_ScaleCM(
     calibu::CameraModelGeneric<double> cam_model,
     unsigned int                       level
-    )
+  )
 {
   const float scale = 1.0f/(1 << level);
 
