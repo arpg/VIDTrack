@@ -437,8 +437,9 @@ int main(int argc, char** argv)
       capture_flag = camera.Capture(*images);
 
       // Reset reference image for DTrack.
-      current_image = devil::ConvertAndNormalize(images->at(0)->Mat());
-      current_depth = images->at(1)->Mat();
+      current_image = images->at(0)->Mat().clone();
+      current_image = devil::ConvertAndNormalize(current_image);
+      current_depth = images->at(1)->Mat().clone();
       cv::Mat maskNAN = cv::Mat(current_depth != current_depth);
       current_depth.setTo(0, maskNAN);
       current_time = images->at(0)->Timestamp();
@@ -466,8 +467,9 @@ int main(int argc, char** argv)
         paused = true;
       } else {
         // Convert to float and normalize.
-        current_image = devil::ConvertAndNormalize(images->at(0)->Mat());
-        current_depth = images->at(1)->Mat();
+        current_image = images->at(0)->Mat().clone();
+        current_image = devil::ConvertAndNormalize(current_image);
+        current_depth = images->at(1)->Mat().clone();
         cv::Mat maskNAN = cv::Mat(current_depth != current_depth);
         current_depth.setTo(0, maskNAN);
         current_time = images->at(0)->Timestamp();
@@ -549,7 +551,7 @@ int main(int argc, char** argv)
     gl_path_gt.SetVisible(ui_show_gt_path);
 
 
-#if 0
+#if 1
     // Update path using NIMA's code.
     {
       const std::vector<uint32_t>& imu_residual_ids = dvi_track.GetImuResidualIds();
