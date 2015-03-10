@@ -27,7 +27,7 @@
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Woverloaded-virtual"
 #endif
-#include <opencv.hpp>
+#include <opencv2/opencv.hpp>
 #ifdef __clang__
 #pragma clang diagnostic pop
 #endif
@@ -36,12 +36,8 @@
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-parameter"
 #endif
-#include <ba/BundleAdjuster.h>
-#include <ba/Types.h>
-#include <ba/InterpolationBuffer.h>
 #include <calibu/Calibu.h>
 #include <HAL/Utils/GetPot>
-#include <HAL/Utils/TicToc.h>
 #include <HAL/Camera/CameraDevice.h>
 #include <HAL/IMU/IMUDevice.h>
 #ifdef __clang__
@@ -57,7 +53,7 @@
 #include <libGUI/GLPathRel.h>
 #include <libGUI/GLPathAbs.h>
 
-#include <devil/tracker.h>
+#include <vidtrack/tracker.h>
 
 
 /////////////////////////////////////////////////////////////////////////////
@@ -67,7 +63,7 @@
 const size_t    filter_size = 0;
 std::deque<std::tuple<Eigen::Vector3d, Eigen::Vector3d, double> >   filter;
 
-void IMU_Handler(pb::ImuMsg& IMUdata, devil::Tracker* dvi_track) {
+void IMU_Handler(pb::ImuMsg& IMUdata, vid::Tracker* vid_tracker) {
   Eigen::Vector3d a(IMUdata.accel().data(0),
                     IMUdata.accel().data(1),
                     IMUdata.accel().data(2));
@@ -98,14 +94,14 @@ void IMU_Handler(pb::ImuMsg& IMUdata, devil::Tracker* dvi_track) {
       at /= filter_size;
 
       // Push filtered IMU data to BA.
-      dvi_track->AddInertialMeasurement(aa, aw, at);
+      vid_tracker->AddInertialMeasurement(aa, aw, at);
 
       // Pop oldest measurement.
       filter.pop_front();
     }
   } else {
     // Push IMU data to BA.
-    dvi_track->AddInertialMeasurement(a, w, IMUdata.system_time());
+    vid_tracker->AddInertialMeasurement(a, w, IMUdata.system_time());
   }
 }
 
@@ -115,8 +111,8 @@ void IMU_Handler(pb::ImuMsg& IMUdata, devil::Tracker* dvi_track) {
 /////////////////////////////////////////////////////////////////////////////
 int main(int argc, char** argv)
 {
-  std::cout << "Starting DEVIL ..." << std::endl;
-  devil::Tracker dvi_track(15, 4);
+  std::cout << "Starting VIDTrack ..." << std::endl;
+  vid::Tracker vid_tracker(15, 4);
 
   GetPot cl_args(argc, argv);
   const int frame_skip = cl_args.follow(0, "-skip");
@@ -142,13 +138,13 @@ int main(int argc, char** argv)
   hal::IMU imu(cl_args.follow("", "-imu"));
   using std::placeholders::_1;
   std::function<void (pb::ImuMsg&)> callback
-                    = std::bind(IMU_Handler, _1, &dvi_track);
+                    = std::bind(IMU_Handler, _1, &vid_tracker);
   imu.RegisterIMUDataCallback(callback);
   std::cout << "- Registering IMU device." << std::endl;
 
 
   ///----- Set up GUI.
-  pangolin::CreateGlutWindowAndBind("DEVIL", 1600, 800);
+  pangolin::CreateGlutWindowAndBind("VIDTrack", 1600, 800);
 
   // Set up panel.
   const unsigned int panel_size = 180;
@@ -438,15 +434,15 @@ int main(int argc, char** argv)
 
       // Reset reference image for DTrack.
       current_image = images->at(0)->Mat().clone();
-      current_image = devil::ConvertAndNormalize(current_image);
+      current_image = vid::ConvertAndNormalize(current_image);
       current_depth = images->at(1)->Mat().clone();
       cv::Mat maskNAN = cv::Mat(current_depth != current_depth);
       current_depth.setTo(0, maskNAN);
       current_time = images->at(0)->Timestamp();
 
-      // Init DEVIL.
-      dvi_track.ConfigureBA(old_rig);
-      dvi_track.ConfigureDTrack(current_image, current_depth,
+      // Init VIDTrack.
+      vid_tracker.ConfigureBA(old_rig);
+      vid_tracker.ConfigureDTrack(current_image, current_depth,
                                 current_time, old_rig.cameras[0].camera);
 
       // Increment frame counter.
@@ -468,7 +464,7 @@ int main(int argc, char** argv)
       } else {
         // Convert to float and normalize.
         current_image = images->at(0)->Mat().clone();
-        current_image = devil::ConvertAndNormalize(current_image);
+        current_image = vid::ConvertAndNormalize(current_image);
         current_depth = images->at(1)->Mat().clone();
         cv::Mat maskNAN = cv::Mat(current_depth != current_depth);
         current_depth.setTo(0, maskNAN);
@@ -477,7 +473,7 @@ int main(int argc, char** argv)
         // Get pose for this image.
         timer.Tic("DEVIL");
         Sophus::SE3d rel_pose, vo;
-        dvi_track.Estimate(current_image, current_depth,
+        vid_tracker.Estimate(current_image, current_depth,
                            current_time, ba_global_pose, rel_pose, vo);
 
         // Uncomment this if poses are to be seen in vision and camera frame.
@@ -514,7 +510,7 @@ int main(int argc, char** argv)
           path_gt_vec.push_back(poses[0].inverse()*poses[frame_index]);
         }
         path_ba_win_vec.clear();
-        const std::deque<ba::PoseT<double> > ba_poses = dvi_track.GetAdjustedPoses();
+        const std::deque<ba::PoseT<double> > ba_poses = vid_tracker.GetAdjustedPoses();
         for (size_t ii = 0; ii < ba_poses.size(); ++ii) {
           path_ba_win_vec.push_back(ba_poses[ii].t_wp);
         }
@@ -533,10 +529,10 @@ int main(int argc, char** argv)
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     if (capture_flag) {
-      image_view.SetImage(images->at(0)->data(), image_width, image_height,
-                          GL_RGB8, GL_LUMINANCE, GL_UNSIGNED_BYTE);
+      image_view.SetImage(current_image.data, image_width, image_height,
+                          GL_RGB8, GL_LUMINANCE, GL_FLOAT);
 
-      depth_view.SetImage(images->at(1)->data(), image_width, image_height,
+      depth_view.SetImage(current_depth.data, image_width, image_height,
                           GL_RGB8, GL_LUMINANCE, GL_FLOAT, true);
     }
 
@@ -554,17 +550,17 @@ int main(int argc, char** argv)
 #if 1
     // Update path using NIMA's code.
     {
-      const std::vector<uint32_t>& imu_residual_ids = dvi_track.GetImuResidualIds();
+      const std::vector<uint32_t>& imu_residual_ids = vid_tracker.GetImuResidualIds();
 
       view_3d.ActivateAndScissor(stacks3d);
-      const ba::ImuCalibrationT<double>& imu = dvi_track.GetImuCalibration();
+      const ba::ImuCalibrationT<double>& imu = vid_tracker.GetImuCalibration();
       std::vector<ba::ImuPoseT<double>> imu_poses;
       const ba::InterpolationBufferT<ba::ImuMeasurementT<double>, double>& imu_buffer
-          = dvi_track.GetImuBuffer();
+          = vid_tracker.GetImuBuffer();
 
       for (uint32_t id : imu_residual_ids) {
-        const auto& res = dvi_track.GetImuResidual(id);
-        const ba::PoseT<double>& pose = dvi_track.GetPose(res.pose1_id);
+        const auto& res = vid_tracker.GetImuResidual(id);
+        const ba::PoseT<double>& pose = vid_tracker.GetPose(res.pose1_id);
         std::vector<ba::ImuMeasurementT<double> > meas =
             imu_buffer.GetRange(res.measurements.front().time,
                                 res.measurements.back().time);

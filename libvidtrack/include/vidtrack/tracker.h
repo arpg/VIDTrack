@@ -35,10 +35,10 @@
 
 #include <calibu/cam/CameraRig.h>
 
-#include <devil/dtrack.h>
+#include <vidtrack/dtrack.h>
 
 
-namespace devil {
+namespace vid {
 
 /////////////////////////////////////////////////////////////////////////////
 /// Convert greyscale image to float and normalizes.

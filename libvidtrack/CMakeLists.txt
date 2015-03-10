@@ -3,9 +3,9 @@ cmake_policy(SET CMP0042 OLD)
 include(def_library)
 include(export_package)
 
-set(DEVIL_VERSION_MAJOR 1)
-set(DEVIL_VERSION_MINOR 0)
-set(DEVIL_VERSION ${DEVIL_VERSION_MAJOR}.${DEVIL_VERSION_MINOR})
+set(VIDTRACK_VERSION_MAJOR 1)
+set(VIDTRACK_VERSION_MINOR 0)
+set(VIDTRACK_VERSION ${DEVIL_VERSION_MAJOR}.${DEVIL_VERSION_MINOR})
 
 option(BUILD_SHARED_LIBS "Build Shared Library" ON)
 
@@ -20,7 +20,7 @@ find_package(TBB REQUIRED)
 
 #################################################
 # Append all includes.
-list(APPEND DEVIL_INC_DIRS
+list(APPEND VIDTRACK_INC_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/include/
     ${MINIGLOG_INCLUDE_DIRS}
     ${EIGEN3_INCLUDE_DIR}
@@ -32,19 +32,19 @@ list(APPEND DEVIL_INC_DIRS
    )
 
 # Add include directories to library.
-include_directories(${DEVIL_INC_DIRS})
+include_directories(${VIDTRACK_INC_DIRS})
 
 
 #################################################
 # Append all library paths.
-list(APPEND DEVIL_LINK_DIRS
+list(APPEND VIDTRACK_LINK_DIRS
     ${Pangolin_LIBRARY_DIRS}
    )
 
 
 #################################################
 # Append all libraries.
-list(APPEND DEVIL_LIBS
+list(APPEND VIDTRACK_LIBS
     ${MINIGLOG_LIBRARIES}
     ${OpenCV2_LIBRARIES}
     ${Calibu_LIBRARIES}
@@ -55,12 +55,12 @@ list(APPEND DEVIL_LIBS
 
 #################################################
 # Library headers and sources.
-set(DEVIL_HDRS
-    include/devil/dtrack.h
-    include/devil/tracker.h
+set(VIDTRACK_HDRS
+    include/vidtrack/dtrack.h
+    include/vidtrack/tracker.h
    )
 
-set(DEVIL_SRCS
+set(VIDTRACK_SRCS
     src/dtrack.cpp
     src/tracker.cpp
    )
@@ -68,19 +68,19 @@ set(DEVIL_SRCS
 
 #################################################
 # Define library.
-def_library(libdevil
-  SOURCES ${DEVIL_HDRS} ${DEVIL_SRCS}
-  LINK_LIBS ${DEVIL_LIBS}
-  PACKAGE DevilTrack)
+def_library(libvidtrack
+  SOURCES ${VIDTRACK_HDRS} ${VIDTRACK_SRCS}
+  LINK_LIBS ${VIDTRACK_LIBS}
+  PACKAGE VIDTrack)
 
 
 #################################################
 # Export library to cmake.
-export_package(DevilTrack
-  TARGETS libdevil
-  VERSION ${DEVIL_VERSION}
-  LIBRARY libdevil
-  LIBRARIES libdevil
-  INCLUDE_DIRS ${DEVIL_INC_DIRS}
-  LINK_DIRS ${DEVIL_LINK_DIRS}
+export_package(VIDTrack
+  TARGETS libvidtrack
+  VERSION ${VIDTRACK_VERSION}
+  LIBRARY libvidtrack
+  LIBRARIES libvidtrack
+  INCLUDE_DIRS ${VIDTRACK_INC_DIRS}
+  LINK_DIRS ${VIDTRACK_LINK_DIRS}
   )

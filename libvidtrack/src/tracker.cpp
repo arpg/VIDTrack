@@ -16,11 +16,11 @@
  * limitations under the License.
  */
 
-#include <devil/tracker.h>
+#include <vidtrack/tracker.h>
 
 #include <miniglog/logging.h>
 
-using namespace devil;
+using namespace vid;
 
 inline Eigen::Vector3d R2Cart(const Eigen::Matrix3d& R) {
   Eigen::Vector3d rpq;
@@ -126,9 +126,15 @@ void Tracker::ConfigureBA(const calibu::CameraRig& rig)
   // so if this is set to true it will NOT change biases much.
   // If using datasets with no bias, set to true.
   options.regularize_biases_in_batch  = true;
-  options.use_triangular_matrices     = false;
-  options.use_sparse_solver           = false;
+//  options.use_triangular_matrices     = false;
+//  options.use_sparse_solver           = false;
   options.use_dogleg                  = true;
+
+  // IMU Sigmas.
+  options.accel_sigma       = 0.001883649; //0.0392266
+  options.accel_bias_sigma  = 1.2589254e-2;
+  options.gyro_sigma        = 5.3088444e-5; //0.00104719755
+  options.gyro_bias_sigma   = 1.4125375e-4;
 
   ConfigureBA(rig, options);
 }
@@ -164,8 +170,8 @@ void Tracker::ConfigureBA(const calibu::CameraRig& rig,
 
     // Set gravity.
     Eigen::Matrix<double, 3, 1> gravity;
-    gravity << 0, -9.806, 0; // CityBlock
-//    gravity << 0, 0, 9.806; // PathGen
+//    gravity << 0, -9.806, 0; // CityBlock
+    gravity << 0, 0, 9.806; // PathGen
 //    gravity << 0, 0, -9.806; // Rig
     bundle_adjuster_.SetGravity(gravity);
 
@@ -267,10 +273,6 @@ void Tracker::Estimate(
   rel_pose_estimate = Tic_ * rel_pose_estimate * Tic_.inverse();
 
   vo_pose = rel_pose_estimate;
-
-  // Adjust covariances.
-//  dtrack_covariance *= 1e-9;
-//  std::cout << "Covariance: " << std::endl << dtrack_covariance << std::endl;
 
   // Push pose estimate into DTrack window.
   DTrackPose dtrack_rel_pose;

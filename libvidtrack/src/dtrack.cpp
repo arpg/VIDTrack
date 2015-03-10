@@ -16,7 +16,7 @@
  * limitations under the License.
  */
 
-#include <devil/dtrack.h>
+#include <vidtrack/dtrack.h>
 
 #include <miniglog/logging.h>
 
@@ -308,6 +308,7 @@ public:
 
       ///-------------------- Robust Norm
       const double w = _NormTukey(y, norm_param_);
+//      const double w = _NormTukey(y, norm_param_) * 1.0/depth;
 
       hessian     += J.transpose() * w * J;
       LHS         += J.transpose() * w * J;
