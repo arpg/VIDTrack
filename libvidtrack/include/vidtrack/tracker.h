@@ -42,12 +42,9 @@ namespace vid {
 
 /////////////////////////////////////////////////////////////////////////////
 /// Convert greyscale image to float and normalizes.
-inline cv::Mat ConvertAndNormalize(const cv::Mat& in)
+inline void ConvertAndNormalize(cv::Mat& image)
 {
-  cv::Mat out;
-  in.convertTo(out, CV_32FC1);
-  out /= 255.0;
-  return out;
+  image.convertTo(image, CV_32FC1, 1.0/255.0);
 }
 
 
@@ -208,4 +205,4 @@ private:
 };
 
 
-} /* devil namespace */
+} /* vid namespace */

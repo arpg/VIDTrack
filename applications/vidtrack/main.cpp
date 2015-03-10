@@ -53,16 +53,17 @@
 #include <libGUI/GLPathRel.h>
 #include <libGUI/GLPathAbs.h>
 
+#include <elas/elas.h>
 #include <vidtrack/tracker.h>
 
 
 /////////////////////////////////////////////////////////////////////////////
-
-/////////////////////////////////////////////////////////////////////////////
-/// IMU Variables.
+/// IMU auxilary variables.
 const size_t    filter_size = 0;
 std::deque<std::tuple<Eigen::Vector3d, Eigen::Vector3d, double> >   filter;
 
+/////////////////////////////////////////////////////////////////////////////
+/// IMU callback.
 void IMU_Handler(pb::ImuMsg& IMUdata, vid::Tracker* vid_tracker) {
   Eigen::Vector3d a(IMUdata.accel().data(0),
                     IMUdata.accel().data(1),
@@ -107,6 +108,37 @@ void IMU_Handler(pb::ImuMsg& IMUdata, vid::Tracker* vid_tracker) {
 
 
 /////////////////////////////////////////////////////////////////////////////
+/// Generate depthmap from stereo.
+cv::Mat GenerateDepthmap(
+    Elas*             elas,
+    const cv::Mat&    left_image,
+    const cv::Mat&    right_image,
+    double            fu,
+    double            baseline
+  )
+{
+  // Store dimensions.
+  int32_t dims[3];
+  dims[0] = left_image.cols;
+  dims[1] = left_image.rows;
+  dims[2] = dims[0];
+
+  // Allocate memory for disparity.
+  cv::Mat disparity = cv::Mat(left_image.rows, left_image.cols, CV_32FC1);
+
+  // Run ELAS.
+  elas->process(left_image.data, right_image.data,
+                reinterpret_cast<float*>(disparity.data), nullptr, dims);
+
+  // Convert disparity to depth.
+  disparity = 1.0 / disparity;
+  disparity = disparity * (fu * baseline);
+
+  return disparity;
+}
+
+
+/////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 int main(int argc, char** argv)
@@ -115,7 +147,9 @@ int main(int argc, char** argv)
   vid::Tracker vid_tracker(15, 4);
 
   GetPot cl_args(argc, argv);
-  const int frame_skip = cl_args.follow(0, "-skip");
+  int frame_skip  = cl_args.follow(0, "-skip");
+  bool have_depth = cl_args.search("-have_depth");
+
 
   ///----- Initialize Camera.
   if (!cl_args.search("-cam")) {
@@ -128,6 +162,12 @@ int main(int argc, char** argv)
   const int image_height = camera.Height();
   std::cout << "- Image Dimensions: " << image_width <<
                "x" << image_height << std::endl;
+
+  if (camera.NumChannels() != 2) {
+    std::cerr << "Two images (stereo pair) are required in order to" \
+                 " use this program!" << std::endl;
+    exit(EXIT_FAILURE);
+  }
 
 
   ///----- Initialize IMU.
@@ -241,7 +281,7 @@ int main(int argc, char** argv)
   bool step_once    = false;
 
 
-  ///----- Load camera model.
+  ///----- Load camera models.
   calibu::CameraRig old_rig;
   if (camera.GetDeviceProperty(hal::DeviceDirectory).empty() == false) {
     std::cout<<"- Loaded camera: " <<
@@ -259,9 +299,13 @@ int main(int argc, char** argv)
   calibu::Rig<double> rig;
   calibu::CreateFromOldRig(&old_rig, &rig);
 
-  ///----- DTrack aux variables.
+  ///----- Aux variables.
   double  current_time;
-  cv::Mat current_image, current_depth;
+  cv::Mat current_left_image, current_right_image, current_depth_map;
+
+  ///----- Set up ELAS.
+  Elas::parameters  elas_params;
+  Elas              elas(elas_params);
 
   ///----- Load file of ground truth poses (optional).
   bool have_gt;
@@ -379,8 +423,9 @@ int main(int argc, char** argv)
   Trv.so3() = calibu::RdfRobotics;
   Sophus::SE3d Tic = rig.t_wc_[0] * Trv;
 
-  // Image holder.
-  std::shared_ptr<pb::ImageArray> images = pb::ImageArray::Create();
+  // Stereo baseline.
+  const double baseline =
+      (rig.t_wc_[0].inverse()*rig.t_wc_[1]).translation().norm();
 
   // Open file for saving poses.
   std::ofstream output_file;
@@ -425,6 +470,9 @@ int main(int argc, char** argv)
       output_file << SceneGraph::GLT2Cart(ba_accum_rel_pose.matrix()).transpose()
                   << std::endl;
 
+      // Image holder.
+      std::shared_ptr<pb::ImageArray> images = pb::ImageArray::Create();
+
       // Capture first image.
       for (size_t ii = 0; ii < filter_size; ++ii) {
         capture_flag = camera.Capture(*images);
@@ -432,18 +480,28 @@ int main(int argc, char** argv)
       }
       capture_flag = camera.Capture(*images);
 
-      // Reset reference image for DTrack.
-      current_image = images->at(0)->Mat().clone();
-      current_image = vid::ConvertAndNormalize(current_image);
-      current_depth = images->at(1)->Mat().clone();
-      cv::Mat maskNAN = cv::Mat(current_depth != current_depth);
-      current_depth.setTo(0, maskNAN);
+      // Set images.
+      current_left_image = images->at(0)->Mat().clone();
+      if (have_depth) {
+        current_depth_map = images->at(1)->Mat().clone();
+      } else {
+        current_right_image = images->at(1)->Mat().clone();
+        current_depth_map = GenerateDepthmap(&elas, current_left_image,
+                                           current_right_image, K(0,0), baseline);
+      }
+
+      // Post-process images.
+      vid::ConvertAndNormalize(current_left_image);
+      cv::Mat maskNAN = cv::Mat(current_depth_map != current_depth_map);
+      current_depth_map.setTo(0, maskNAN);
+
+      // Get current time.
       current_time = images->at(0)->Timestamp();
 
       // Init VIDTrack.
       vid_tracker.ConfigureBA(old_rig);
-      vid_tracker.ConfigureDTrack(current_image, current_depth,
-                                current_time, old_rig.cameras[0].camera);
+      vid_tracker.ConfigureDTrack(current_left_image, current_depth_map,
+                                  current_time, old_rig.cameras[0].camera);
 
       // Increment frame counter.
       frame_index++;
@@ -452,6 +510,9 @@ int main(int argc, char** argv)
 
     ///----- Step forward ...
     if (!paused || pangolin::Pushed(step_once)) {
+      // Image holder.
+      std::shared_ptr<pb::ImageArray> images = pb::ImageArray::Create();
+
       //  Capture the new image.
       for (int ii = 0; ii < frame_skip; ++ii) {
         capture_flag = camera.Capture(*images);
@@ -462,18 +523,28 @@ int main(int argc, char** argv)
       if (capture_flag == false) {
         paused = true;
       } else {
-        // Convert to float and normalize.
-        current_image = images->at(0)->Mat().clone();
-        current_image = vid::ConvertAndNormalize(current_image);
-        current_depth = images->at(1)->Mat().clone();
-        cv::Mat maskNAN = cv::Mat(current_depth != current_depth);
-        current_depth.setTo(0, maskNAN);
+        // Set images.
+        current_left_image = images->at(0)->Mat().clone();
+        if (have_depth) {
+          current_depth_map = images->at(1)->Mat().clone();
+        } else {
+          current_right_image = images->at(1)->Mat().clone();
+          current_depth_map = GenerateDepthmap(&elas, current_left_image,
+                                             current_right_image, K(0,0), baseline);
+        }
+
+        // Post-process images.
+        vid::ConvertAndNormalize(current_left_image);
+        cv::Mat maskNAN = cv::Mat(current_depth_map != current_depth_map);
+        current_depth_map.setTo(0, maskNAN);
+
+        // Get current time.
         current_time = images->at(0)->Timestamp();
 
         // Get pose for this image.
-        timer.Tic("DEVIL");
+        timer.Tic("Tracker");
         Sophus::SE3d rel_pose, vo;
-        vid_tracker.Estimate(current_image, current_depth,
+        vid_tracker.Estimate(current_left_image, current_depth_map,
                            current_time, ba_global_pose, rel_pose, vo);
 
         // Uncomment this if poses are to be seen in vision and camera frame.
@@ -482,7 +553,7 @@ int main(int argc, char** argv)
         ba_accum_rel_pose *= rel_pose;
 
         vo_pose *= vo;
-        timer.Toc("DEVIL");
+        timer.Toc("Tracker");
 
         // Save poses.
         Eigen::Vector6d tmp = SceneGraph::GLT2Cart(ba_accum_rel_pose.matrix());
@@ -529,10 +600,10 @@ int main(int argc, char** argv)
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     if (capture_flag) {
-      image_view.SetImage(current_image.data, image_width, image_height,
+      image_view.SetImage(current_left_image.data, image_width, image_height,
                           GL_RGB8, GL_LUMINANCE, GL_FLOAT);
 
-      depth_view.SetImage(current_depth.data, image_width, image_height,
+      depth_view.SetImage(current_depth_map.data, image_width, image_height,
                           GL_RGB8, GL_LUMINANCE, GL_FLOAT, true);
     }
 
