@@ -1,7 +1,6 @@
 cmake_policy(SET CMP0024 OLD)
 
 find_package(VIDTrack REQUIRED)
-find_package(ELAS REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(Sophus REQUIRED)
 find_package(OpenCV2 REQUIRED)
@@ -14,7 +13,6 @@ find_package(Calibu 0.1 REQUIRED)
 
 include_directories(${LIBGUI_INCLUDE_DIR})
 include_directories(${VIDTrack_INCLUDE_DIRS})
-include_directories(${ELAS_INCLUDE_DIRS})
 include_directories(${EIGEN3_INCLUDE_DIR})
 include_directories(${Sophus_INCLUDE_DIR})
 include_directories(${OpenCV2_INCLUDE_DIR})
@@ -36,7 +34,6 @@ add_dependencies(vidtrack libvidtrack libelas libGUI)
 
 target_link_libraries(vidtrack ${LIBGUI_LIBRARIES})
 target_link_libraries(vidtrack ${VIDTrack_LIBRARIES})
-target_link_libraries(vidtrack ${ELAS_LIBRARIES})
 target_link_libraries(vidtrack ${OpenCV2_LIBRARIES})
 target_link_libraries(vidtrack ${HAL_LIBRARIES})
 target_link_libraries(vidtrack ${PbMsgs_LIBRARIES})

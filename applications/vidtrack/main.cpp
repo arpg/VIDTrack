@@ -53,7 +53,6 @@
 #include <libGUI/GLPathRel.h>
 #include <libGUI/GLPathAbs.h>
 
-#include <elas/elas.h>
 #include <vidtrack/tracker.h>
 
 
@@ -107,6 +106,7 @@ void IMU_Handler(pb::ImuMsg& IMUdata, vid::Tracker* vid_tracker) {
 }
 
 
+#if 0
 /////////////////////////////////////////////////////////////////////////////
 /// Generate depthmap from stereo.
 cv::Mat GenerateDepthmap(
@@ -136,7 +136,7 @@ cv::Mat GenerateDepthmap(
 
   return disparity;
 }
-
+#endif
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
@@ -148,7 +148,6 @@ int main(int argc, char** argv)
 
   GetPot cl_args(argc, argv);
   int frame_skip  = cl_args.follow(0, "-skip");
-  bool have_depth = cl_args.search("-have_depth");
 
 
   ///----- Initialize Camera.
@@ -303,10 +302,6 @@ int main(int argc, char** argv)
   double  current_time;
   cv::Mat current_left_image, current_right_image, current_depth_map;
 
-  ///----- Set up ELAS.
-  Elas::parameters  elas_params;
-  Elas              elas(elas_params);
-
   ///----- Load file of ground truth poses (optional).
   bool have_gt;
   std::vector<Sophus::SE3d> poses;
@@ -418,6 +413,9 @@ int main(int argc, char** argv)
   Sophus::SE3d                      ba_accum_rel_pose;
   Sophus::SE3d                      ba_global_pose;
 
+  // Image holder.
+  std::shared_ptr<pb::ImageArray> images = pb::ImageArray::Create();
+
   // IMU-Camera transform through robotic to vision conversion.
   Sophus::SE3d Trv;
   Trv.so3() = calibu::RdfRobotics;
@@ -470,9 +468,6 @@ int main(int argc, char** argv)
       output_file << SceneGraph::GLT2Cart(ba_accum_rel_pose.matrix()).transpose()
                   << std::endl;
 
-      // Image holder.
-      std::shared_ptr<pb::ImageArray> images = pb::ImageArray::Create();
-
       // Capture first image.
       for (size_t ii = 0; ii < filter_size; ++ii) {
         capture_flag = camera.Capture(*images);
@@ -482,13 +477,7 @@ int main(int argc, char** argv)
 
       // Set images.
       current_left_image = images->at(0)->Mat().clone();
-      if (have_depth) {
-        current_depth_map = images->at(1)->Mat().clone();
-      } else {
-        current_right_image = images->at(1)->Mat().clone();
-        current_depth_map = GenerateDepthmap(&elas, current_left_image,
-                                           current_right_image, K(0,0), baseline);
-      }
+      current_depth_map = images->at(1)->Mat().clone();
 
       // Post-process images.
       vid::ConvertAndNormalize(current_left_image);
@@ -510,9 +499,6 @@ int main(int argc, char** argv)
 
     ///----- Step forward ...
     if (!paused || pangolin::Pushed(step_once)) {
-      // Image holder.
-      std::shared_ptr<pb::ImageArray> images = pb::ImageArray::Create();
-
       //  Capture the new image.
       for (int ii = 0; ii < frame_skip; ++ii) {
         capture_flag = camera.Capture(*images);
@@ -525,13 +511,7 @@ int main(int argc, char** argv)
       } else {
         // Set images.
         current_left_image = images->at(0)->Mat().clone();
-        if (have_depth) {
-          current_depth_map = images->at(1)->Mat().clone();
-        } else {
-          current_right_image = images->at(1)->Mat().clone();
-          current_depth_map = GenerateDepthmap(&elas, current_left_image,
-                                             current_right_image, K(0,0), baseline);
-        }
+        current_depth_map = images->at(1)->Mat().clone();
 
         // Post-process images.
         vid::ConvertAndNormalize(current_left_image);

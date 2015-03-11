@@ -10,7 +10,13 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++0x -Wall -Wextra")
 
 # Libraries.
 add_subdirectory(libvidtrack)
-add_subdirectory(libelas)
+
+
+# ELAS (optional).
+option(BUILD_ELAS "Build ELAS" OFF)
+if(BUILD_ELAS)
+  add_subdirectory(libelas)
+endif()
 
 
 # Example applications.
