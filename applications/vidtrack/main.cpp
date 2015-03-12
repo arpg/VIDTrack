@@ -47,13 +47,14 @@
 #include <pangolin/pangolin.h>
 #include <SceneGraph/SceneGraph.h>
 
+#include <vidtrack/vidtrack.h>
+
 #include <libGUI/AnalyticsView.h>
 #include <libGUI/Timer.h>
 #include <libGUI/TimerView.h>
 #include <libGUI/GLPathRel.h>
 #include <libGUI/GLPathAbs.h>
 
-#include <vidtrack/tracker.h>
 
 
 /////////////////////////////////////////////////////////////////////////////
@@ -300,7 +301,7 @@ int main(int argc, char** argv)
 
   ///----- Aux variables.
   double  current_time;
-  cv::Mat current_left_image, current_right_image, current_depth_map;
+  cv::Mat current_left_image, current_depth_map;
 
   ///----- Load file of ground truth poses (optional).
   bool have_gt;
@@ -421,10 +422,6 @@ int main(int argc, char** argv)
   Trv.so3() = calibu::RdfRobotics;
   Sophus::SE3d Tic = rig.t_wc_[0] * Trv;
 
-  // Stereo baseline.
-  const double baseline =
-      (rig.t_wc_[0].inverse()*rig.t_wc_[1]).translation().norm();
-
   // Open file for saving poses.
   std::ofstream output_file;
   output_file.open("poses.txt");
@@ -480,7 +477,6 @@ int main(int argc, char** argv)
       current_depth_map = images->at(1)->Mat().clone();
 
       // Post-process images.
-      vid::ConvertAndNormalize(current_left_image);
       cv::Mat maskNAN = cv::Mat(current_depth_map != current_depth_map);
       current_depth_map.setTo(0, maskNAN);
 
@@ -514,7 +510,6 @@ int main(int argc, char** argv)
         current_depth_map = images->at(1)->Mat().clone();
 
         // Post-process images.
-        vid::ConvertAndNormalize(current_left_image);
         cv::Mat maskNAN = cv::Mat(current_depth_map != current_depth_map);
         current_depth_map.setTo(0, maskNAN);
 
@@ -581,7 +576,7 @@ int main(int argc, char** argv)
 
     if (capture_flag) {
       image_view.SetImage(current_left_image.data, image_width, image_height,
-                          GL_RGB8, GL_LUMINANCE, GL_FLOAT);
+                          GL_RGB8, GL_LUMINANCE, GL_UNSIGNED_BYTE);
 
       depth_view.SetImage(current_depth_map.data, image_width, image_height,
                           GL_RGB8, GL_LUMINANCE, GL_FLOAT, true);

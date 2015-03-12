@@ -21,12 +21,13 @@
 #include <miniglog/logging.h>
 
 /////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////
 inline float interp(
-    float              x,            // Input: X coordinate.
-    float              y,            // Input: Y coordinate.
-    const float*       image_ptr,    // Input: Pointer to image.
-    const unsigned int image_width,  // Input: Image width.
-    const unsigned int image_height  // Input: Image height.
+    float                 x,            // Input: X coordinate.
+    float                 y,            // Input: Y coordinate.
+    const unsigned char*  image_ptr,    // Input: Pointer to image.
+    const unsigned int    image_width,  // Input: Image width.
+    const unsigned int    image_height  // Input: Image height.
     )
 {
   if (!((x >= 0) && (y >= 0) && (x <= image_width-2)
@@ -44,7 +45,7 @@ inline float interp(
   const float  ax1 = 1.0f-ax;
   const float  ay1 = 1.0f-ay;
 
-  const float* p0  = image_ptr+(image_width*py)+px;
+  const unsigned char* p0  = image_ptr+(image_width*py)+px;
 
   float        p1  = p0[0];
   float        p2  = p0[1];
@@ -63,6 +64,7 @@ inline float interp(
   return p1+p2;
 }
 
+#ifdef VIDTRACK_USE_TBB
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 class PoseRefine
@@ -154,25 +156,25 @@ public:
         continue;
       }
 
-      if ((depth <= min_depth_) || (depth >= max_depth_)) {
+      if (depth < min_depth_ || depth > max_depth_) {
         continue;
       }
 
       // 3d point in reference depth camera.
       Eigen::Vector4d hPr_d;
-      hPr_d(0) = depth*(pr_d(0)-Krd_(0,2))/Krd_(0,0);
-      hPr_d(1) = depth*(pr_d(1)-Krd_(1,2))/Krd_(1,1);
+      hPr_d(0) = depth * (pr_d(0)-Krd_(0,2))/Krd_(0,0);
+      hPr_d(1) = depth * (pr_d(1)-Krd_(1,2))/Krd_(1,1);
       hPr_d(2) = depth;
       hPr_d(3) = 1;
 
       // 3d point in reference grey camera (homogenized).
       // If depth and grey cameras are aligned, Tgd_ = I4.
-      const Eigen::Vector4d hPr_g = Tgd_*hPr_d;
+      const Eigen::Vector4d hPr_g = Tgd_ * hPr_d;
 
       // Project to reference grey camera's image coordinate.
       Eigen::Vector2d pr_g;
-      pr_g(0) = (hPr_g(0)*Krg_(0,0)/hPr_g(2))+Krg_(0,2);
-      pr_g(1) = (hPr_g(1)*Krg_(1,1)/hPr_g(2))+Krg_(1,2);
+      pr_g(0) = (hPr_g(0)*Krg_(0,0)/hPr_g(2)) + Krg_(0,2);
+      pr_g(1) = (hPr_g(1)*Krg_(1,1)/hPr_g(2)) + Krg_(1,2);
 
       // Check if point is out of bounds.
       if ((pr_g(0) < 2) || (pr_g(0) >= ref_grey_.cols-3) || (pr_g(1) < 2)
@@ -181,12 +183,12 @@ public:
       }
 
       // Homogenized 3d point in live grey camera.
-      const Eigen::Vector4d hPl_g = Tlr_*hPr_g;
+      const Eigen::Vector4d hPl_g = Tlr_ * hPr_g;
 
       // Project to live grey ccamera's image coordinate.
       Eigen::Vector2d pl_g;
-      pl_g(0) = (hPl_g(0)*Klg_(0,0)/hPl_g(2))+Klg_(0,2);
-      pl_g(1) = (hPl_g(1)*Klg_(1,1)/hPl_g(2))+Klg_(1,2);
+      pl_g(0) = (hPl_g(0)*Klg_(0,0)/hPl_g(2)) + Klg_(0,2);
+      pl_g(1) = (hPl_g(1)*Klg_(1,1)/hPl_g(2)) + Klg_(1,2);
 
       // Check if point is out of bounds.
       if ((pl_g(0) < 2) || (pl_g(0) >= live_grey_.cols-3) || (pl_g(1) < 2)
@@ -196,17 +198,15 @@ public:
 
       // Get intensities.
       const float Il =
-          interp(pl_g(0), pl_g(1),
-                 reinterpret_cast<float*>(live_grey_.data), live_grey_.cols,
-                 live_grey_.rows);
+          interp(pl_g(0), pl_g(1), live_grey_.data,
+                 live_grey_.cols, live_grey_.rows);
       const float Ir =
-          interp(pr_g(0), pr_g(1),
-                 reinterpret_cast<float*>(ref_grey_.data), ref_grey_.cols,
-                 ref_grey_.rows);
+          interp(pr_g(0), pr_g(1), ref_grey_.data,
+                 ref_grey_.cols, ref_grey_.rows);
 
       // Discard under/over-saturated pixels.
       if (discard_saturated_) {
-        if ((Il == 0) || (Il == 1.0) || (Ir == 0) || (Ir == 1.0)) {
+        if (Il == 0.0 || Il == 255.0 || Ir == 0.0 || Ir == 255.0) {
           continue;
         }
       }
@@ -243,21 +243,17 @@ public:
       ///-------------------- Forward Compositional
       // Image derivative.
       const float Il_xr =
-          interp(pl_g(0)+1, pl_g(1),
-                 reinterpret_cast<float*>(live_grey_.data), live_grey_.cols,
-                 live_grey_.rows);
+          interp(pl_g(0)+1, pl_g(1), live_grey_.data,
+                 live_grey_.cols, live_grey_.rows);
       const float Il_xl =
-          interp(pl_g(0)-1, pl_g(1),
-                 reinterpret_cast<float*>(live_grey_.data), live_grey_.cols,
-                 live_grey_.rows);
+          interp(pl_g(0)-1, pl_g(1), live_grey_.data,
+                 live_grey_.cols, live_grey_.rows);
       const float Il_yu =
-          interp(pl_g(0), pl_g(1)-1,
-                 reinterpret_cast<float*>(live_grey_.data), live_grey_.cols,
-                 live_grey_.rows);
+          interp(pl_g(0), pl_g(1)-1, live_grey_.data,
+                 live_grey_.cols, live_grey_.rows);
       const float Il_yd =
-          interp(pl_g(0), pl_g(1)+1,
-                 reinterpret_cast<float*>(live_grey_.data), live_grey_.cols,
-                 live_grey_.rows);
+          interp(pl_g(0), pl_g(1)+1, live_grey_.data,
+                 live_grey_.cols, live_grey_.rows);
 
       Eigen::Matrix<double, 1, 2> dIl;
       dIl << (Il_xr-Il_xl)/2.0, (Il_yd-Il_yu)/2.0;
@@ -266,32 +262,28 @@ public:
       ///-------------------- Inverse Compositional
       // Image derivative.
       const float Ir_xr =
-          interp(pr_g(0)+1, pr_g(1),
-                 reinterpret_cast<float*>(ref_grey_.data), ref_grey_.cols,
-                 ref_grey_.rows);
+          interp(pr_g(0)+1, pr_g(1), ref_grey_.data,
+                 ref_grey_.cols, ref_grey_.rows);
       const float Ir_xl =
-          interp(pr_g(0)-1, pr_g(1),
-                 reinterpret_cast<float*>(ref_grey_.data), ref_grey_.cols,
-                 ref_grey_.rows);
+          interp(pr_g(0)-1, pr_g(1), ref_grey_.data,
+                 ref_grey_.cols, ref_grey_.rows);
       const float Ir_yu =
-          interp(pr_g(0), pr_g(1)-1,
-                 reinterpret_cast<float*>(ref_grey_.data), ref_grey_.cols,
-                 ref_grey_.rows);
+          interp(pr_g(0), pr_g(1)-1, ref_grey_.data,
+                 ref_grey_.cols, ref_grey_.rows);
       const float Ir_yd =
-          interp(pr_g(0), pr_g(1)+1,
-                 reinterpret_cast<float*>(ref_grey_.data), ref_grey_.cols,
-                 ref_grey_.rows);
+          interp(pr_g(0), pr_g(1)+1, ref_grey_.data,
+                 ref_grey_.cols, ref_grey_.rows);
 
       Eigen::Matrix<double, 1, 2> dIr;
       dIr << (Ir_xr-Ir_xl)/2.0, (Ir_yd-Ir_yu)/2.0;
 
 
       // Projection & dehomogenization derivative.
-      Eigen::Vector3d KlPl = Klg_*hPl_g.head(3);
+      Eigen::Vector3d KlPl = Klg_ * hPl_g.head(3);
 
       Eigen::Matrix2x3d dPl;
-      dPl << 1.0/KlPl(2), 0, -KlPl(0)/(KlPl(2)*KlPl(2)), 0, 1.0/KlPl(2),
-          -KlPl(1)/(KlPl(2)*KlPl(2));
+      dPl << 1.0/KlPl(2), 0, -KlPl(0)/(KlPl(2)*KlPl(2)),
+          0, 1.0/KlPl(2), -KlPl(1)/(KlPl(2)*KlPl(2));
 
       const Eigen::Vector4d dIesm_dPl_KlgTlr = ((dIl+dIr)/2.0)*dPl*KlgTlr_;
 
@@ -366,20 +358,29 @@ private:
   float             min_depth_;
   float             max_depth_;
 };
+#endif
+
 
 
 /////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////
 DTrack::DTrack(unsigned int pyramid_levels) :
-  kPyramidLevels(pyramid_levels),
-  tbb_scheduler_(tbb::task_scheduler_init::deferred)
+  kPyramidLevels(pyramid_levels)
+#ifdef VIDTRACK_USE_TBB
+  , tbb_scheduler_(tbb::task_scheduler_init::deferred)
+#endif
 {
+#ifdef VIDTRACK_USE_TBB
   tbb_scheduler_.initialize();
+#endif
 }
 
 ///////////////////////////////////////////////////////////////////////////
 DTrack::~DTrack()
 {
+#ifdef VIDTRACK_USE_TBB
   tbb_scheduler_.terminate();
+#endif
 }
 
 ///////////////////////////////////////////////////////////////////////////
@@ -431,7 +432,7 @@ double DTrack::Estimate(
 
   // TODO(jfalquez) Pass this options in Config method to avoid re-initializing.
   // Options.
-  const double norm_c            = 0.04;
+  const double norm_c            = 10.0;
   const double norm_cd           = 0.20;
   const bool   discard_saturated = true;
   const float  min_depth         = 0.01;
@@ -458,8 +459,7 @@ double DTrack::Estimate(
 
   // Build live pyramid.
   cv::Mat live_grey_copy = live_grey.clone();
-  _BrightnessCorrectionImagePair(reinterpret_cast<float*>(live_grey_copy.data),
-                                 reinterpret_cast<float*>(ref_grey_pyramid_[0].data),
+  _BrightnessCorrectionImagePair(live_grey_copy.data, ref_grey_pyramid_[0].data,
                                  live_grey_copy.cols*live_grey_copy.rows);
   cv::buildPyramid(live_grey_copy, live_grey_pyramid_, kPyramidLevels);
   cv::buildPyramid(live_depth, live_depth_pyramid_, kPyramidLevels);
@@ -486,6 +486,20 @@ double DTrack::Estimate(
     const calibu::CameraModelGeneric<double>& ref_depth_cmod =
         ref_depth_cam_model_[pyramid_lvl];
 
+#ifndef VIDTRACK_USE_TBB
+    // NOTE(jfalquez) Use this for speed-up. Add reference image derivative for
+    // inverse compositional.
+    // Pre-calculate gradients so we don't do it each iteration.
+    /*
+    cv::Mat gradient_x(live_grey_img.rows, live_grey_img.cols, CV_32FC1);
+    cv::Mat gradient_y(live_grey_img.rows, live_grey_img.cols, CV_32FC1);
+    _CalculateGradients(
+          live_grey_img.data, live_grey_img.cols, live_grey_img.rows,
+          reinterpret_cast<float*>(gradient_x.data),
+          reinterpret_cast<float*>(gradient_y.data));
+          */
+#endif
+
     // Reset error.
     last_error = FLT_MAX;
 
@@ -493,7 +507,9 @@ double DTrack::Estimate(
     const double norm_c_pyr = norm_c*(pyramid_lvl+1);
     const double norm_cd_pyr = norm_cd*(pyramid_lvl+1);
 
-    for (unsigned int num_iters = 0; num_iters < vec_max_iterations[pyramid_lvl]; ++num_iters) {
+    for (unsigned int num_iters = 0;
+         num_iters < vec_max_iterations[pyramid_lvl];
+         ++num_iters) {
       // Reset.
       hessian.setZero();
       LHS.setZero();
@@ -512,10 +528,12 @@ double DTrack::Estimate(
 
       const Eigen::Matrix3x4d KlgTlr = Klg*Tlr.matrix3x4();
 
+#ifdef VIDTRACK_USE_TBB
       // Launch TBB.
-      PoseRefine pose_ref(live_grey_img, live_depth_img, ref_grey_img, ref_depth_img, Klg,
-                          Krg, Krd, Tgd_.matrix(), Tlr.matrix(), KlgTlr,
-                          norm_c_pyr, discard_saturated, min_depth, max_depth);
+      PoseRefine pose_ref(live_grey_img, live_depth_img, ref_grey_img,
+                          ref_depth_img, Klg, Krg, Krd, Tgd_.matrix(),
+                          Tlr.matrix(), KlgTlr, norm_c_pyr, discard_saturated,
+                          min_depth, max_depth);
 
       tbb::parallel_reduce(tbb::blocked_range<size_t>(0,
                     ref_depth_img.cols*ref_depth_img.rows, 10000), pose_ref);
@@ -524,15 +542,141 @@ double DTrack::Estimate(
       RHS                  = pose_ref.RHS;
       squared_error        = pose_ref.error;
       number_observations  = pose_ref.num_obs;
-
-      // Store Hessian.
-#if DECIMATE
-      if (pyramid_lvl == 1) {
+      hessian              = pose_ref.hessian;
 #else
-      if (pyramid_lvl == 0) {
-#endif
-        hessian = pose_ref.hessian;
+      // Iterate through depth map.
+      for (int row = 0; row < ref_depth_img.rows; ++row) {
+        for (int col = 0; col < ref_depth_img.cols; ++col) {
+
+          // 2d point in reference depth camera.
+          Eigen::Vector2d pr_d;
+          pr_d << col, row;
+
+          // Get depth.
+          const float depth = ref_depth_img.at<float>(row, col);
+
+          // Check if depth is NAN.
+          if (depth != depth) {
+            continue;
+          }
+
+          if (depth < min_depth || depth > max_depth) {
+            continue;
+          }
+
+          // 3d point in reference depth camera.
+          Eigen::Vector4d hPr_d;
+          hPr_d(0) = depth * (pr_d(0)-Krd(0,2))/Krd(0,0);
+          hPr_d(1) = depth * (pr_d(1)-Krd(1,2))/Krd(1,1);
+          hPr_d(2) = depth;
+          hPr_d(3) = 1;
+
+          // 3d point in reference grey camera (homogenized).
+          // If depth and grey cameras are aligned, Tgd_ = I4.
+          const Eigen::Vector4d hPr_g = Tgd_.matrix() * hPr_d;
+
+          // Project to reference grey camera's image coordinate.
+          Eigen::Vector2d pr_g;
+          pr_g(0) = (hPr_g(0)*Krg(0,0)/hPr_g(2)) + Krg(0,2);
+          pr_g(1) = (hPr_g(1)*Krg(1,1)/hPr_g(2)) + Krg(1,2);
+
+          // Check if point is out of bounds.
+          if (pr_g(0) < 2 || pr_g(0) >= ref_grey_img.cols-3
+             || pr_g(1) < 2 || pr_g(1) >= ref_grey_img.rows-3) {
+            continue;
+          }
+
+          // Homogenized 3d point in live grey camera.
+          const Eigen::Vector4d hPl_g = Tlr.matrix() * hPr_g;
+
+          // Project to live grey camera's image coordinate.
+          Eigen::Vector2d pl_g;
+          pl_g(0) = (hPl_g(0)*Klg(0,0)/hPl_g(2)) + Klg(0,2);
+          pl_g(1) = (hPl_g(1)*Klg(1,1)/hPl_g(2)) + Klg(1,2);
+
+          // Check if point is out of bounds.
+          if (pl_g(0) < 2 || pl_g(0) >= live_grey_img.cols-3
+             || pl_g(1) < 2 || pl_g(1) >= live_grey_img.rows-3) {
+            continue;
+          }
+
+          // Get intensities.
+          const float Il = interp(pl_g(0), pl_g(1), live_grey_img.data,
+                                  live_grey_img.cols, live_grey_img.rows);
+          const float Ir = interp(pr_g(0), pr_g(1), ref_grey_img.data,
+                                  ref_grey_img.cols, ref_grey_img.rows);
+
+          // Discard under/over-saturated pixels.
+          if (discard_saturated) {
+            if (Il == 0.0 || Il == 255.0 || Ir == 0.0 || Ir == 255.0) {
+              continue;
+            }
+          }
+
+          // Calculate error.
+          const double y = Il-Ir;
+
+
+          ///-------------------- Forward Compositional
+          // Image derivative.
+          const float Il_xr = interp(pl_g(0)+1, pl_g(1), live_grey_img.data,
+                                     live_grey_img.cols, live_grey_img.rows);
+          const float Il_xl = interp(pl_g(0)-1, pl_g(1), live_grey_img.data,
+                                     live_grey_img.cols, live_grey_img.rows);
+          const float Il_yu = interp(pl_g(0), pl_g(1)-1, live_grey_img.data,
+                                     live_grey_img.cols, live_grey_img.rows);
+          const float Il_yd = interp(pl_g(0), pl_g(1)+1, live_grey_img.data,
+                                     live_grey_img.cols, live_grey_img.rows);
+
+          Eigen::Matrix<double, 1, 2> dIl;
+          dIl << (Il_xr-Il_xl)/2.0, (Il_yd-Il_yu)/2.0;
+
+
+          ///-------------------- Inverse Compositional
+          // Image derivative.
+          const float Ir_xr = interp(pr_g(0)+1, pr_g(1), ref_grey_img.data,
+                                     ref_grey_img.cols, ref_grey_img.rows);
+          const float Ir_xl = interp(pr_g(0)-1, pr_g(1), ref_grey_img.data,
+                                     ref_grey_img.cols, ref_grey_img.rows);
+          const float Ir_yu = interp(pr_g(0), pr_g(1)-1, ref_grey_img.data,
+                                     ref_grey_img.cols, ref_grey_img.rows);
+          const float Ir_yd = interp(pr_g(0), pr_g(1)+1, ref_grey_img.data,
+                                     ref_grey_img.cols, ref_grey_img.rows);
+
+          Eigen::Matrix<double, 1, 2> dIr;
+          dIr << (Ir_xr-Ir_xl)/2.0, (Ir_yd-Ir_yu)/2.0;
+
+
+          // Projection & dehomogenization derivative.
+          Eigen::Vector3d KlPl = Klg * hPl_g.head(3);
+
+          Eigen::Matrix2x3d dPl;
+          dPl  << 1.0/KlPl(2), 0, -KlPl(0)/(KlPl(2)*KlPl(2)),
+              0, 1.0/KlPl(2), -KlPl(1)/(KlPl(2)*KlPl(2));
+
+          const Eigen::Vector4d dIesm_dPl_KlgTlr = ((dIl+dIr)/2.0)*dPl*KlgTlr;
+
+          // J = dIesm_dPl_KlgTlr * gen_i * Pr
+          Eigen::Matrix<double, 1, 6> J;
+          J << dIesm_dPl_KlgTlr(0),
+               dIesm_dPl_KlgTlr(1),
+               dIesm_dPl_KlgTlr(2),
+              -dIesm_dPl_KlgTlr(1)*hPr_g(2) + dIesm_dPl_KlgTlr(2)*hPr_g(1),
+              +dIesm_dPl_KlgTlr(0)*hPr_g(2) - dIesm_dPl_KlgTlr(2)*hPr_g(0),
+              -dIesm_dPl_KlgTlr(0)*hPr_g(1) + dIesm_dPl_KlgTlr(1)*hPr_g(0);
+
+
+          ///-------------------- Robust Norm
+          const double w = _NormTukey(y, norm_c_pyr);
+
+          hessian       += J.transpose() * w * J;
+          LHS           += J.transpose() * w * J;
+          RHS           += J.transpose() * w * y;
+          squared_error += y * y;
+          number_observations++;
+        }
       }
+#endif
 
       // Solution.
       Eigen::Vector6d X;
@@ -604,7 +748,7 @@ double DTrack::Estimate(
 
 
 ///////////////////////////////////////////////////////////////////////////
-inline calibu::CameraModelGeneric<double> DTrack::_ScaleCM(
+calibu::CameraModelGeneric<double> DTrack::_ScaleCM(
     calibu::CameraModelGeneric<double> cam_model,
     unsigned int                       level
   )
@@ -615,15 +759,99 @@ inline calibu::CameraModelGeneric<double> DTrack::_ScaleCM(
 }
 
 
+/////////////////////////////////////////////////////////////////////////////
+void DTrack::_CalculateGradients(
+    const unsigned char*      image_ptr,
+    int                       image_width,
+    int                       image_height,
+    float*                    gradX_ptr,
+    float*                    gradY_ptr
+  )
+{
+  const int image_width_M1  = image_width - 1;
+  const int image_height_M1 = image_height - 1;
+
+  const unsigned char* pRow,*pBottomRow,*pTopRow;
+
+  pRow         = image_ptr;
+  pBottomRow   = image_ptr + image_width;
+  float* pRowX = gradX_ptr;
+  float* pRowY = gradY_ptr;
+
+  // Work on the first row.
+  pRowX[0] = pRow[1] - pRow[0];
+  pRowY[0] = pBottomRow[0] - pRow[0];
+  for( int nCol = 1; nCol < image_width_M1; ++nCol ) {
+    pRowX[nCol] = (pRow[nCol+1] - pRow[nCol-1])/2;
+    pRowY[nCol] = pBottomRow[nCol] - pRow[nCol];
+  }
+  pRowX[image_width_M1] = pRow[image_width_M1] - pRow[image_width_M1-1];
+  pRowY[image_width_M1] = pBottomRow[image_width_M1] - pRow[image_width_M1];
+
+  pRow       = image_ptr + image_width;
+  pBottomRow = image_ptr + 2*image_width;
+  pTopRow    = image_ptr;
+  pRowX      = gradX_ptr + image_width;
+  pRowY      = gradY_ptr + image_width;
+
+  // Work from the second to the "last-1" row.
+  for( int nRow = 1; nRow < image_height_M1; ++nRow ) {
+    // First column.
+    *pRowX++ = pRow[1] - pRow[0];
+    *pRowY++ = (pBottomRow[0] - pTopRow[0])/2;
+
+    for( int nCol = 1; nCol < image_width_M1; ++nCol ) {
+      *pRowX++ = (pRow[nCol+1] - pRow[nCol-1])/2;
+      *pRowY++ = (pBottomRow[nCol] - pTopRow[nCol])/2;
+    }
+
+    // Last column.
+    *pRowX++ = pRow[image_width_M1] - pRow[image_width_M1-1];
+    *pRowY++ = (pBottomRow[image_width_M1] - pTopRow[image_width_M1])/2;
+
+    // Move to next rows.
+    pRow       += image_width;
+    pBottomRow += image_width;
+    pTopRow    += image_width;
+  }
+
+  // Last row.
+  pTopRow  = image_ptr + ( image_height_M1 - 1 ) * image_width;
+  pRow     = image_ptr + image_height_M1 * image_width;
+  pRowX    = gradX_ptr + image_height_M1 * image_width;
+  pRowY    = gradY_ptr + image_height_M1 * image_width;
+  pRowX[0] = pRow[1] - pRow[0];
+  pRowY[0] = pRow[0] - pTopRow[0];
+
+  for( int nCol = 1; nCol < image_width_M1; ++nCol ) {
+    pRowX[nCol] = (pRow[nCol+1] - pRow[nCol-1])/2;
+    pRowY[nCol] = pRow[nCol] - pTopRow[nCol];
+  }
+  pRowX[image_width_M1] = pRow[image_width_M1] - pRow[image_width_M1-1];
+  pRowY[image_width_M1] = pRow[image_width_M1] - pTopRow[image_width_M1];
+}
+
+
+///////////////////////////////////////////////////////////////////////////
+inline double DTrack::_NormTukey(double r,
+                                 double c)
+{
+  const double roc    = r/c;
+  const double omroc2 = 1.0f-roc*roc;
+
+  return (fabs(r) <= c) ? omroc2*omroc2 : 0.0f;
+}
+
+
 ///////////////////////////////////////////////////////////////////////////
 void DTrack::_BrightnessCorrectionImagePair(
-    float*          img1_ptr,
-    float*          img2_ptr,
-    size_t          image_size
+    unsigned char*          img1_ptr,
+    unsigned char*          img2_ptr,
+    size_t                  image_size
   )
 {
   // Save original ptr.
-  float* img1_ptr_orig = img1_ptr;
+  unsigned char* img1_ptr_orig = img1_ptr;
 
   // Sampling variables.
   const size_t     sample_step = 1;
@@ -659,12 +887,16 @@ void DTrack::_BrightnessCorrectionImagePair(
   // Reset pointer.
   img1_ptr = img1_ptr_orig;
 
+  // Integer mean.
+  int imean1 = static_cast<int>(mean1);
+  int imean2 = static_cast<int>(mean2);
+
   // Normalize image.
   float pix;
   for (size_t ii = 0; ii < image_size; ++ii) {
-    pix = (img1_ptr[ii] - mean1)*std_ratio + mean2;
+    pix = static_cast<float>(img1_ptr[ii] - imean1)*std_ratio + imean2;
     if(pix < 0.0)  pix = 0.0;
-    if(pix > 1.0) pix = 1.0;
-    img1_ptr[ii] = pix;
+    if(pix > 255.0) pix = 255.0;
+    img1_ptr[ii] = static_cast<unsigned char>(pix);
   }
 }

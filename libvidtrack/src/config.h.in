@@ -1,0 +1,3 @@
+#pragma once
+
+#cmakedefine VIDTRACK_USE_TBB

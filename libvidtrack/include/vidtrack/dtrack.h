@@ -21,7 +21,11 @@
 #include <algorithm>
 #include <vector>
 
+#include <vidtrack/config.h>
+
+#ifdef VIDTRACK_USE_TBB
 #include <tbb/tbb.h>
+#endif
 
 #ifdef __clang__
 #pragma clang diagnostic push
@@ -58,21 +62,21 @@ public:
 
   ///////////////////////////////////////////////////////////////////////////
   void SetParams(
-      const calibu::CameraModelGeneric<double>& live_grey_cmod,
-      const calibu::CameraModelGeneric<double>& ref_grey_cmod,
-      const calibu::CameraModelGeneric<double>& ref_depth_cmod,
-      const Sophus::SE3d&                       Tgd
+      const calibu::CameraModelGeneric<double>&   live_grey_cmod,
+      const calibu::CameraModelGeneric<double>&   ref_grey_cmod,
+      const calibu::CameraModelGeneric<double>&   ref_depth_cmod,
+      const Sophus::SE3d&                         Tgd
       );
 
   ///////////////////////////////////////////////////////////////////////////
   void SetKeyframe(
-      const cv::Mat& ref_grey,  // Input: Reference image (float format, normalized).
-      const cv::Mat& ref_depth  // Input: Reference depth (float format, meters).
+      const cv::Mat&    ref_grey,  // Input: Reference image (float format, normalized).
+      const cv::Mat&    ref_depth  // Input: Reference depth (float format, meters).
       );
 
   ///////////////////////////////////////////////////////////////////////////
   double Estimate(
-      bool                      use_pyramid,  // Flag to enable full pyramid.
+      bool                      use_pyramid,  // Input: Flag to enable full pyramid.
       const cv::Mat&            live_grey,    // Input: Live image (float format, normalized).
       Sophus::SE3Group<double>& Trl,          // Input/Output: Transform between grey cameras (vision frame/input is hint).
       Eigen::Matrix6d&          covariance,   // Output: Covariance.
@@ -83,17 +87,34 @@ public:
 private:
   ///////////////////////////////////////////////////////////////////////////
   calibu::CameraModelGeneric<double> _ScaleCM(
-      calibu::CameraModelGeneric<double> cam_model,
-      unsigned int                       level
-      );
+      calibu::CameraModelGeneric<double>  cam_model,  // Input: Camera Model.
+      unsigned int                        level       // Input: Number of pyramid levels.
+    );
+
+  ///////////////////////////////////////////////////////////////////////////
+  /// Calculates image gradients.
+  void _CalculateGradients(
+      const unsigned char*      image_ptr,    //< Input: Image pointer.
+      int                       image_width,  //< Input: Image width.
+      int                       image_height, //< Input: Image height.
+      float*                    gradX_ptr,    //< Output: Gradient in X.
+      float*                    gradY_ptr     //< Output: Gradient in Y.
+    );
+
+  ///////////////////////////////////////////////////////////////////////////
+  /// Tukey robust norm.
+  double _NormTukey(
+      double      r,    //< Input: Error.
+      double      c     //< Input: Norm parameter.
+    );
 
   ///////////////////////////////////////////////////////////////////////////
   /// Adjust mean and variance of Image1 brightness to be closer to Image2.
   void _BrightnessCorrectionImagePair(
-      float*          img1_ptr,     //< Input: Pointer 1
-      float*          img2_ptr,     //< Input: Pointer 2
+      unsigned char*  img1_ptr,     //< Input: Pointer 1
+      unsigned char*  img2_ptr,     //< Input: Pointer 2
       size_t          image_size    //< Input: Number of pixels in image
-      );
+    );
 
 
   ///////////////////////////////////////////////////////////////////////////
@@ -101,7 +122,9 @@ public:
   const unsigned int kPyramidLevels;
 
 private:
+#ifdef VIDTRACK_USE_TBB
   tbb::task_scheduler_init                         tbb_scheduler_;
+#endif
   std::vector<cv::Mat>                             live_grey_pyramid_;
   std::vector<cv::Mat>                             live_depth_pyramid_;
   std::vector<cv::Mat>                             ref_grey_pyramid_;

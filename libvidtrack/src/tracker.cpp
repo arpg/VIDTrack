@@ -297,7 +297,7 @@ void Tracker::Estimate(
 
   ///--------------------
   /// Windowed BA.
-  if (dtrack_window_.size() >= kMinWindowSize) {
+  if (dtrack_window_.size() >= kMinWindowSize && false) {
     // Sanity check.
     CHECK_EQ(ba_window_.size(), dtrack_window_.size()+1)
         << "BA: " << ba_window_.size() << " DTrack: " << dtrack_window_.size();
