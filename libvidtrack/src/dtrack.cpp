@@ -64,6 +64,7 @@ inline float interp(
   return p1+p2;
 }
 
+
 #ifdef VIDTRACK_USE_TBB
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
@@ -239,7 +240,6 @@ public:
       }
       */
 
-
       ///-------------------- Forward Compositional
       // Image derivative.
       const float Il_xr =
@@ -299,8 +299,8 @@ public:
 
 
       ///-------------------- Robust Norm
-      const double w = _NormTukey(y, norm_param_);
-//      const double w = _NormTukey(y, norm_param_) * 1.0/depth;
+      // Depth sigma added.
+      const double w = _NormTukey(y, norm_param_) * (1.0/(depth*depth));
 
       hessian     += J.transpose() * w * J;
       LHS         += J.transpose() * w * J;
@@ -435,8 +435,8 @@ double DTrack::Estimate(
   const double norm_c            = 10.0;
   const double norm_cd           = 0.20;
   const bool   discard_saturated = true;
-  const float  min_depth         = 0.01;
-  const float  max_depth         = 30.0;
+  const float  min_depth         = 0.20;
+  const float  max_depth         = 20.0;
 
   // Set pyramid max-iterations and full estimate mask.
   std::vector<bool>         vec_full_estimate  = {1, 1, 1, 0};
@@ -458,10 +458,14 @@ double DTrack::Estimate(
   CHECK_EQ(vec_max_iterations.size(), kPyramidLevels);
 
   // Build live pyramid.
+  /*
   cv::Mat live_grey_copy = live_grey.clone();
-  _BrightnessCorrectionImagePair(live_grey_copy.data, ref_grey_pyramid_[0].data,
-                                 live_grey_copy.cols*live_grey_copy.rows);
+  _BrightnessCorrectionImagePairF(reinterpret_cast<float*>(live_grey_copy.data),
+                                  reinterpret_cast<float*>(ref_grey_pyramid_[0].data),
+                                  live_grey_copy.cols*live_grey_copy.rows);
   cv::buildPyramid(live_grey_copy, live_grey_pyramid_, kPyramidLevels);
+  */
+  cv::buildPyramid(live_grey, live_grey_pyramid_, kPyramidLevels);
   cv::buildPyramid(live_depth, live_depth_pyramid_, kPyramidLevels);
 
   // Aux variables.
@@ -667,7 +671,8 @@ double DTrack::Estimate(
 
 
           ///-------------------- Robust Norm
-          const double w = _NormTukey(y, norm_c_pyr);
+          // Depth sigma added.
+          const double w = _NormTukey(y, norm_c_pyr) * (1.0/(depth*depth));
 
           hessian       += J.transpose() * w * J;
           LHS           += J.transpose() * w * J;
@@ -724,6 +729,10 @@ double DTrack::Estimate(
         // Update number of observations used in estimation.
         num_obs = number_observations;
 
+        // Set covariance output.
+        covariance = hessian.inverse();
+        covariance *= number_observations;
+
         // Update Trl.
         Trl = (Tlr*Sophus::SE3Group<double>::exp(X)).inverse();
 
@@ -739,9 +748,6 @@ double DTrack::Estimate(
       }
     }
   }
-
-  // Set covariance output.
-  covariance = hessian.inverse();
 
   return last_error;
 }
