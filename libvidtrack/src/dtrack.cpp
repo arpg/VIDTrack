@@ -536,7 +536,7 @@ double DTrack::Estimate(
                           min_depth, max_depth);
 
       tbb::parallel_reduce(tbb::blocked_range<size_t>(0,
-                    ref_depth_img.cols*ref_depth_img.rows, 10000), pose_ref);
+                    ref_depth_img.cols*ref_depth_img.rows), pose_ref);
 
       LHS                  = pose_ref.LHS;
       RHS                  = pose_ref.RHS;
