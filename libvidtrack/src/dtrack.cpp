@@ -366,6 +366,9 @@ private:
 /////////////////////////////////////////////////////////////////////////////
 DTrack::DTrack(unsigned int pyramid_levels) :
   kPyramidLevels(pyramid_levels)
+#ifdef VIDTRACK_USE_CUDA
+  , cu_dtrack_(nullptr)
+#endif
 #ifdef VIDTRACK_USE_TBB
   , tbb_scheduler_(tbb::task_scheduler_init::deferred)
 #endif
@@ -401,6 +404,13 @@ void DTrack::SetParams(
   // Copy reference camera's depth-grey transform.
   Tgd_ = Tgd;
   LOG(INFO) << "Tgd is: " << Tgd.log().transpose() << std::endl;
+
+#ifdef VIDTRACK_USE_CUDA
+  // Initialize cuDTrack if used.
+  if (cu_dtrack_ != nullptr) {
+    cu_dtrack_ = new cuDTrack(live_grey_cmod.Height(), live_grey_cmod.Width());
+  }
+#endif
 }
 
 ///////////////////////////////////////////////////////////////////////////
@@ -490,7 +500,7 @@ double DTrack::Estimate(
     const calibu::CameraModelGeneric<double>& ref_depth_cmod =
         ref_depth_cam_model_[pyramid_lvl];
 
-#ifndef VIDTRACK_USE_TBB
+#if !defined(VIDTRACK_USE_TBB) && !defined(VIDTRACK_USE_CUDA)
     // NOTE(jfalquez) Use this for speed-up. Add reference image derivative for
     // inverse compositional.
     // Pre-calculate gradients so we don't do it each iteration.
@@ -532,7 +542,9 @@ double DTrack::Estimate(
 
       const Eigen::Matrix3x4d KlgTlr = Klg*Tlr.matrix3x4();
 
-#ifdef VIDTRACK_USE_TBB
+#if defined(VIDTRACK_USE_CUDA)
+
+#elif defined(VIDTRACK_USE_TBB)
       // Launch TBB.
       PoseRefine pose_ref(live_grey_img, live_depth_img, ref_grey_img,
                           ref_depth_img, Klg, Krg, Krd, Tgd_.matrix(),

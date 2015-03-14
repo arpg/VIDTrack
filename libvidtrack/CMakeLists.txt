@@ -26,10 +26,6 @@ if(CUDA_FOUND)
   option(ENABLE_CUDA "Enable CUDA for VIDTrack" OFF)
   if(ENABLE_CUDA)
     set(VIDTRACK_USE_CUDA 1 CACHE INTERNAL "VIDTrack CUDA Flag" FORCE)
-
-    set(CUDA_FILES include/vidtrack/dtrack.cuh src/dtrack.cu)
-    cuda_add_library(dtrack_cuda ${CUDA_FILES})
-
     if(TBB_FOUND)
       message(WARNING "Since CUDA is enabled, TBB has been turned off.")
       set(VIDTRACK_USE_TBB 0 CACHE INTERNAL "VIDTrack TBB Flag" FORCE)
@@ -87,8 +83,7 @@ if(VIDTRACK_USE_TBB)
 endif()
 
 if(VIDTRACK_USE_CUDA)
-  message(STATUS "HERERE")
-  list(APPEND VIDTRACK_LIBS libdtrack_cuda)
+  list(APPEND VIDTRACK_LIBS dtrack_cuda)
 endif()
 
 #################################################
@@ -113,7 +108,19 @@ configure_file(
 
 #################################################
 # Define library.
+
 if(VIDTRACK_USE_CUDA)
+  set(CUDA_FILES include/vidtrack/dtrack.cuh src/dtrack.cu)
+
+  if ("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -stdlib=libstdc++")
+  endif()
+  set(CUDA_PROPAGATE_HOST_FLAGS OFF)
+  set(CUDA_NVCC_FLAGS "-use_fast_math -gencode arch=compute_30,code=sm_30" )
+
+#  set(CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} -arch=sm_30")
+  cuda_add_library(dtrack_cuda ${CUDA_FILES})
+
   install(TARGETS dtrack_cuda
     EXPORT VIDTrack
     RUNTIME DESTINATION ${CMAKE_INSTALL_PREFIX}/bin

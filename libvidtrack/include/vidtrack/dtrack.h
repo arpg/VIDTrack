@@ -127,6 +127,9 @@ public:
   const unsigned int kPyramidLevels;
 
 private:
+#ifdef VIDTRACK_USE_CUDA
+  cuDTrack*                                        cu_dtrack_;
+#endif
 #ifdef VIDTRACK_USE_TBB
   tbb::task_scheduler_init                         tbb_scheduler_;
 #endif
