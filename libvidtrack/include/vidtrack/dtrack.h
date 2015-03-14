@@ -27,6 +27,11 @@
 #include <tbb/tbb.h>
 #endif
 
+
+#ifdef VIDTRACK_USE_CUDA
+#include <vidtrack/dtrack.cuh>
+#endif
+
 #ifdef __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Woverloaded-virtual"

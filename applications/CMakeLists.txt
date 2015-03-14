@@ -2,4 +2,4 @@
 add_subdirectory(libGUI)
 
 # Example applications.
-add_subdirectory(vidtrack)
+add_subdirectory(tracker)

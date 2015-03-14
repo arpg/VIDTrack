@@ -21,6 +21,29 @@ if(TBB_FOUND)
   set(VIDTRACK_USE_TBB 1 CACHE INTERNAL "VIDTrack TBB Flag" FORCE)
 endif()
 
+find_package(CUDA QUIET)
+if(CUDA_FOUND)
+  option(ENABLE_CUDA "Enable CUDA for VIDTrack" OFF)
+  if(ENABLE_CUDA)
+    set(VIDTRACK_USE_CUDA 1 CACHE INTERNAL "VIDTrack CUDA Flag" FORCE)
+
+    set(CUDA_FILES include/vidtrack/dtrack.cuh src/dtrack.cu)
+    cuda_add_library(dtrack_cuda ${CUDA_FILES})
+
+    if(TBB_FOUND)
+      message(WARNING "Since CUDA is enabled, TBB has been turned off.")
+      set(VIDTRACK_USE_TBB 0 CACHE INTERNAL "VIDTrack TBB Flag" FORCE)
+    endif()
+  else()
+    set(VIDTRACK_USE_CUDA 0 CACHE INTERNAL "VIDTrack CUDA Flag" FORCE)
+    if(TBB_FOUND)
+      message(WARNING "Since CUDA is disabled, TBB has been turned on.")
+      set(VIDTRACK_USE_TBB 1 CACHE INTERNAL "VIDTrack TBB Flag" FORCE)
+    endif()
+  endif()
+endif()
+
+
 #################################################
 # Append all includes.
 list(APPEND VIDTRACK_INC_DIRS
@@ -34,7 +57,7 @@ list(APPEND VIDTRACK_INC_DIRS
     ${BA_INCLUDE_DIRS}
    )
 
-if(TBB_FOUND)
+if(VIDTRACK_USE_TBB)
 list(APPEND VIDTRACK_INC_DIRS ${TBB_INCLUDE_DIRS})
 endif()
 
@@ -59,8 +82,13 @@ list(APPEND VIDTRACK_LIBS
     ${BA_LIBRARIES}
    )
 
-if(TBB_FOUND)
+if(VIDTRACK_USE_TBB)
   list(APPEND VIDTRACK_LIBS ${TBB_LIBRARIES})
+endif()
+
+if(VIDTRACK_USE_CUDA)
+  message(STATUS "HERERE")
+  list(APPEND VIDTRACK_LIBS libdtrack_cuda)
 endif()
 
 #################################################
@@ -85,7 +113,16 @@ configure_file(
 
 #################################################
 # Define library.
-def_library(libvidtrack
+if(VIDTRACK_USE_CUDA)
+  install(TARGETS dtrack_cuda
+    EXPORT VIDTrack
+    RUNTIME DESTINATION ${CMAKE_INSTALL_PREFIX}/bin
+    LIBRARY DESTINATION ${CMAKE_INSTALL_PREFIX}/lib
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_PREFIX}/lib
+  )
+endif()
+
+def_library(vidtrack
   SOURCES ${VIDTRACK_HDRS} ${VIDTRACK_SRCS}
   LINK_LIBS ${VIDTRACK_LIBS}
   PACKAGE VIDTrack)
@@ -94,10 +131,10 @@ def_library(libvidtrack
 #################################################
 # Export library to cmake.
 export_package(VIDTrack
-  TARGETS libvidtrack
+  TARGETS vidtrack
   VERSION ${VIDTRACK_VERSION}
-  LIBRARY libvidtrack
-  LIBRARIES libvidtrack
+  LIBRARY vidtrack
+  LIBRARIES vidtrack
   INCLUDE_DIRS ${VIDTRACK_INC_DIRS}
   LINK_DIRS ${VIDTRACK_LINK_DIRS}
   )
