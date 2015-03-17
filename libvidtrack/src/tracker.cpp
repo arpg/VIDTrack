@@ -62,7 +62,7 @@ inline Eigen::Matrix<double, 6, 1> T2Cart(const Eigen::Matrix4d& T) {
 
 ///////////////////////////////////////////////////////////////////////////
 Tracker::Tracker(unsigned int window_size, unsigned int pyramid_levels)
-  : kWindowSize(window_size), kMinWindowSize(10), kPyramidLevels(pyramid_levels),
+  : kWindowSize(window_size), kMinWindowSize(2), kPyramidLevels(pyramid_levels),
     config_ba_(false), config_dtrack_(false), ba_has_converged_(false),
     dtrack_(pyramid_levels)
 {
@@ -108,6 +108,7 @@ void Tracker::ConfigureDTrack(
 
     // Add initial pose to BA.
     ba::PoseT<double> initial_pose;
+    initial_pose.SetZero();
     initial_pose.t_wp = Sophus::SE3d();
     initial_pose.time = time + kTimeOffset;
     ba_window_.push_back(initial_pose);
@@ -126,8 +127,10 @@ void Tracker::ConfigureBA(const calibu::CameraRig& rig)
   // so if this is set to true it will NOT change biases much.
   // If using datasets with no bias, set to true.
   options.regularize_biases_in_batch  = true;
-//  options.use_triangular_matrices     = false;
-//  options.use_sparse_solver           = false;
+  options.use_triangular_matrices     = false;
+  // NOTE(jfalquez) When this is set to true, and no IMU residuals are added
+  // an error/warning shows up.
+  options.use_sparse_solver           = false;
   options.use_dogleg                  = true;
 
   // IMU Sigmas.
@@ -289,7 +292,10 @@ void Tracker::Estimate(
   ba::PoseT<double>& latest_adjusted_pose = ba_window_.back();
 
   // Add most recent pose to BA.
+  // TODO(jfalquez) Find out the behavior of this pose... does setting
+  // velocities or anything affect BA?
   ba::PoseT<double> latest_pose;
+  latest_pose = latest_adjusted_pose;
   latest_pose.t_wp = latest_adjusted_pose.t_wp * dtrack_rel_pose.T_ab;
   latest_pose.time = time;
   ba_window_.push_back(latest_pose);
@@ -353,8 +359,14 @@ void Tracker::Estimate(
     }
 
     // Solve.
-    bundle_adjuster_.Solve(1000, 1.0);
-    ba_has_converged_ = true;
+    bundle_adjuster_.Solve(1000, 1.0, false);
+
+    // NOTE(jfalquez) This is a hack since BA has that weird memory problem
+    // and the minimum window has to be set to 2. However, the real minimum
+    // window is controlled here.
+    if (ba_window_.size() == 10) {
+      ba_has_converged_ = true;
+    }
 
     // Get adjusted poses.
     ba_window_.clear();

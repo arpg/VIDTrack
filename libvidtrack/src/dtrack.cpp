@@ -381,6 +381,11 @@ DTrack::DTrack(unsigned int pyramid_levels) :
 ///////////////////////////////////////////////////////////////////////////
 DTrack::~DTrack()
 {
+#ifdef VIDTRACK_USE_CUDA
+  if (cu_dtrack_ != nullptr) {
+    free(cu_dtrack_);
+  }
+#endif
 #ifdef VIDTRACK_USE_TBB
   tbb_scheduler_.terminate();
 #endif
@@ -543,7 +548,9 @@ double DTrack::Estimate(
       const Eigen::Matrix3x4d KlgTlr = Klg*Tlr.matrix3x4();
 
 #if defined(VIDTRACK_USE_CUDA)
-
+      cu_dtrack_->Estimate(live_grey_img, ref_grey_img, ref_depth_img, Klg,
+                           Krg, Krd, Tgd_.matrix(), Tlr.matrix(), KlgTlr,
+                           norm_c_pyr, discard_saturated, min_depth, max_depth);
 #elif defined(VIDTRACK_USE_TBB)
       // Launch TBB.
       PoseRefine pose_ref(live_grey_img, live_depth_img, ref_grey_img,
