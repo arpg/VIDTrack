@@ -3,11 +3,6 @@
 //#include <float.h>
 //#include <string>
 
-//#include <thrust/count.h>
-
-#include <thrust/device_ptr.h>
-#include <thrust/reduce.h>
-
 #include <vidtrack/dtrack.cuh>
 
 
@@ -28,13 +23,13 @@ __global__ void dEstimate()
 ///////////////////////////////////////////////////////////////////////////
 cuDTrack::cuDTrack(unsigned int max_height, unsigned int max_width)
 {
-  cudaMalloc((void**)&ref_image_, max_width*max_height*sizeof(unsigned char));
-  cudaMalloc((void**)&ref_depth_, max_width*max_height*sizeof(float));
-  cudaMalloc((void**)&live_image_, max_width*max_height*sizeof(unsigned char));
+  cudaMalloc((void**)&d_ref_image_, max_width*max_height*sizeof(unsigned char));
+  cudaMalloc((void**)&d_ref_depth_, max_width*max_height*sizeof(float));
+  cudaMalloc((void**)&d_live_image_, max_width*max_height*sizeof(unsigned char));
 
   // Storage for Least Squares System
   // 21 for upper diagonal of LHS, 6 for RHS, 1 for squared_error, 1 for num_obs.
-  cudaMalloc((void**)&lss_, max_width*max_height*sizeof(float)*29);
+  cudaMalloc((void**)&d_lss_, max_width*max_height*sizeof(float)*29);
 
 #if 0
   cudaMalloc((void**)&lss_.jacobian, max_width*max_height*sizeof(float)*6);
@@ -47,17 +42,17 @@ cuDTrack::cuDTrack(unsigned int max_height, unsigned int max_width)
 ///////////////////////////////////////////////////////////////////////////
 cuDTrack::~cuDTrack()
 {
-  if (ref_image_ != NULL) {
-    cudaFree(ref_image_);
+  if (d_ref_image_ != NULL) {
+    cudaFree(d_ref_image_);
   }
-  if (ref_depth_ != NULL) {
-    cudaFree(ref_depth_);
+  if (d_ref_depth_ != NULL) {
+    cudaFree(d_ref_depth_);
   }
-  if (live_image_ != NULL) {
-    cudaFree(live_image_);
+  if (d_live_image_ != NULL) {
+    cudaFree(d_live_image_);
   }
-  if (lss_ != NULL) {
-    cudaFree(lss_);
+  if (d_lss_ != NULL) {
+    cudaFree(d_lss_);
   }
 }
 
@@ -72,11 +67,6 @@ void cuDTrack::_LaunchEstimate(unsigned int image_height, unsigned int image_wid
 
   dEstimate<<<gridSize, blockSize>>>();
 
-#if 0
-  thrust::device_ptr<float> ptr = thrust::device_pointer_cast(lss_.error);
-  float max = thrust::reduce(ptr, &ptr[image_height*image_width], -1.0f,
-      thrust::maximum<float>());
-#endif
   _CheckErrors("Estimate");
 }
 

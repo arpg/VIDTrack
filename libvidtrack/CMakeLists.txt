@@ -112,13 +112,9 @@ configure_file(
 if(VIDTRACK_USE_CUDA)
   set(CUDA_FILES include/vidtrack/dtrack.cuh src/dtrack.cu)
 
-  if ("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -stdlib=libstdc++")
-  endif()
   set(CUDA_PROPAGATE_HOST_FLAGS OFF)
-  set(CUDA_NVCC_FLAGS "-use_fast_math -gencode arch=compute_30,code=sm_30" )
-
-#  set(CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} -arch=sm_30")
+#  set(CUDA_NVCC_FLAGS "-use_fast_math -gencode arch=compute_30,code=sm_30" )
+  set(CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} -arch=sm_30")
   cuda_add_library(dtrack_cuda ${CUDA_FILES})
 
   install(TARGETS dtrack_cuda

@@ -19,8 +19,21 @@
 #pragma once
 
 #ifndef __CUDACC__
-#include <Eigen/Dense>
+
+# ifdef __clang__
+#   pragma clang diagnostic push
+#   pragma clang diagnostic ignored "-Woverloaded-virtual"
+# endif
+
+# include <opencv2/opencv.hpp>
+
+# ifdef __clang__
+#   pragma clang diagnostic pop
+# endif
+
+# include <Eigen/Dense>
 #endif
+
 
 class cuDTrack {
 
@@ -30,39 +43,33 @@ public:
   ~cuDTrack();
 
 #ifndef __CUDACC__
-  void Estimate(unsigned int image_height, unsigned int image_width, Eigen::Matrix3d t)
+  void Estimate(
+      const cv::Mat&                      live_grey,
+      const cv::Mat&                      ref_grey,
+      const cv::Mat&                      ref_depth,
+      const Eigen::Matrix3d&              Klg,
+      const Eigen::Matrix3d&              Krg,
+      const Eigen::Matrix3d&              Krd,
+      const Eigen::Matrix4d&              Tgd,
+      const Eigen::Matrix4d&              Tlr,
+      const Eigen::Matrix<double, 3, 4>&  KlgTlr,
+      float                               norm_param,
+      bool                                discard_saturated,
+      float                               min_depth,
+      float                               max_depth
+    )
   {
-
+    // Pack all from structs (Eigen/OpenCV) to host pointers.
+    _LaunchEstimate(live_grey.rows, live_grey.cols);
+    // Unpack.
   }
-
 #endif
-
-
-#ifndef __CUDACC__
-#if 0
-    inline __host__ Mat() {
-    }
-
-    template<typename PF>
-    inline __host__ Mat(const Eigen::Matrix<PF,R,C>& em) {
-        for( size_t r=0; r<R; ++r )
-            for( size_t c=0; c<C; ++c )
-                m[r*C + c] = (P)em(r,c);
-    }
-
-    template<typename PT>
-    inline __host__ operator Eigen::Matrix<PT,R,C>() const {
-        Eigen::Matrix<PT,R,C> ret;
-        for( size_t r=0; r<R; ++r )
-            for( size_t c=0; c<C; ++c )
-                ret(r,c) = (PT)m[r*C + c];
-        return ret;
-    }
-#endif
-#endif // EIGEN
 
 private:
-  void _LaunchEstimate(unsigned int image_height, unsigned int image_width);
+  void _LaunchEstimate(
+      unsigned int image_height,
+      unsigned int image_width
+    );
 
   int _GCD(int a, int b);
 
@@ -72,19 +79,8 @@ private:
 
 
 private:
-  unsigned char*      ref_image_;
-  float*              ref_depth_;
-  unsigned char*      live_image_;
-  float*              lss_;
-
-#if 0
-  struct LeastSquaresSystem
-  {
-    float*      LHS;
-    float*      RHS;
-    float*      squared_error;
-    bool*       obs;
-  };
-  LeastSquaresSystem  lss_;
-#endif
+  unsigned char*      d_ref_image_;
+  float*              d_ref_depth_;
+  unsigned char*      d_live_image_;
+  float*              d_lss_;
 };
