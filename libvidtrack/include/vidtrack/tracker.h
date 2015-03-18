@@ -137,9 +137,15 @@ public:
   }
 
   // For debugging. Remove later.
+  size_t GetNumPoses()
+  {
+    return pose_relaxer_.GetNumPoses();
+  }
+
+  // For debugging. Remove later.
   const ba::PoseT<double>& GetPose(const uint32_t id)
   {
-    return bundle_adjuster_.GetPose(id);
+    return pose_relaxer_.GetPose(id);
   }
 
   // For debugging. Remove later.
@@ -154,6 +160,17 @@ public:
     return ba_window_;
   }
 
+  // For debugging. Remove later.
+  void RunBatchBAwithLC();
+
+  void FindLoopClosureCandidates(
+      int                                             margin,
+      int                                             id,
+      const cv::Mat&                                  thumbnail,
+      float                                           max_intensity_change,
+      std::vector<std::pair<unsigned int, float> >&   candidates
+    );
+
 
   ///
   ///////////////////////////////////////////////////////////////////////////
@@ -167,6 +184,21 @@ public:
 //  const double       kTimeOffset = -0.00195049; // Old
 //  const double       kTimeOffset = -0.00490676; // New
 
+  // Hack because of stupid deadlines like usual.
+  struct DTrackPoseOut {
+    Sophus::SE3d      T_ab;
+    double            time_a;
+    double            time_b;
+    Eigen::Matrix6d   covariance;
+    cv::Mat           grey_img;
+    cv::Mat           depth_img;
+    cv::Mat           thumbnail;
+  };
+  std::vector<DTrackPoseOut>                        dtrack_vector_;
+
+  typedef ba::ImuMeasurementT<double>   ImuMeasurement;
+  ba::InterpolationBufferT<ImuMeasurement, double>  imu_buffer_;
+
 private:
   struct DTrackPose {
     Sophus::SE3d      T_ab;
@@ -175,8 +207,7 @@ private:
     Eigen::Matrix6d   covariance;
   };
 
-  typedef ba::ImuMeasurementT<double>   ImuMeasurement;
-
+//  typedef ba::ImuMeasurementT<double>   ImuMeasurement;
 
 private:
   bool                                              config_ba_;
@@ -195,9 +226,10 @@ private:
 
   /// BA variables.
   ba::BundleAdjuster<double, 0, 15, 0>              bundle_adjuster_;
+  ba::BundleAdjuster<double, 0, 6, 0>               pose_relaxer_;
   ba::Options<double>                               options_;
   std::deque<ba::PoseT<double> >                    ba_window_;
-  ba::InterpolationBufferT<ImuMeasurement, double>  imu_buffer_;
+//  ba::InterpolationBufferT<ImuMeasurement, double>  imu_buffer_;
 
   // TODO(jfalquez) Remove later. Only for debugging.
   std::vector<uint32_t>                             imu_residual_ids_;

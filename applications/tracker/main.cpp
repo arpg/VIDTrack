@@ -390,6 +390,10 @@ int main(int argc, char** argv)
     pangolin::Display("ui").Show(fullscreen);
   });
 
+  bool run_batch_ba = false;
+  pangolin::RegisterKeyPressCallback('o',
+                                       [&run_batch_ba] {
+                                          run_batch_ba = !run_batch_ba; });
   // Container view handler.
   const char keyShowHide[] = {'1','2','3','4','5','6','7','8','9','0'};
   const char keySave[]     = {'!','@','#','$','%','^','&','*','(',')'};
@@ -570,6 +574,17 @@ int main(int argc, char** argv)
     }
 
 
+    ///----- Run full BA ...
+    if (pangolin::Pushed(run_batch_ba)) {
+      vid_tracker.RunBatchBAwithLC();
+      path_ba_vec.clear();
+      for (size_t ii = 0; ii < vid_tracker.GetNumPoses(); ++ii) {
+        const ba::PoseT<double>& pose = vid_tracker.GetPose(ii);
+        path_ba_vec.push_back(pose.t_wp);
+      }
+    }
+
+
     /////////////////////////////////////////////////////////////////////////////
     ///---- Render
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -593,7 +608,7 @@ int main(int argc, char** argv)
     gl_path_gt.SetVisible(ui_show_gt_path);
 
 
-#if 1
+#if 0
     // Update path using NIMA's code.
     {
       const std::vector<uint32_t>& imu_residual_ids = vid_tracker.GetImuResidualIds();

@@ -57,6 +57,66 @@ inline Eigen::Matrix<double, 6, 1> T2Cart(const Eigen::Matrix4d& T) {
 }
 
 
+///////////////////////////////////////////////////////////////////////////
+/// SAD score image1 with image2 -- images are assumed to be same type
+/// and dimensions.
+/// returns: SAD score
+template<typename T>
+inline float ScoreImages(
+    const cv::Mat&              image1,
+    const cv::Mat&              image2
+  )
+{
+  float score = 0;
+  for (int ii = 0; ii < image1.rows; ii++) {
+    for (int jj = 0; jj < image1.cols; jj++) {
+      score += fabs(image1.at<T>(ii, jj) - image2.at<T>(ii, jj));
+    }
+  }
+  return score;
+}
+
+///////////////////////////////////////////////////////////////////////////
+bool _CompareNorm(
+    std::pair<unsigned int, float> lhs,
+    std::pair<unsigned int, float> rhs
+  )
+{
+  return std::get<1>(lhs) < std::get<1>(rhs);
+}
+
+
+///////////////////////////////////////////////////////////////////////////
+void Tracker::FindLoopClosureCandidates(
+    int                                             margin,
+    int                                             id,
+    const cv::Mat&                                  thumbnail,
+    float                                           max_intensity_change,
+    std::vector<std::pair<unsigned int, float> >&   candidates
+  )
+{
+  CHECK_GE(margin, 0);
+  CHECK_GE(id, 0);
+  CHECK_LE(static_cast<size_t>(id), dtrack_vector_.size());
+
+  const float max_score = max_intensity_change
+                          * (thumbnail.rows * thumbnail.cols);
+  for (unsigned int ii = 0; ii < dtrack_vector_.size(); ++ii) {
+    if (abs(id - ii) > margin) {
+      DTrackPoseOut& dtrack_estimate = dtrack_vector_[ii];
+
+      float score = ScoreImages<unsigned char>(thumbnail,
+                                               dtrack_estimate.thumbnail);
+
+      if (score < max_score) {
+        candidates.push_back(std::pair<unsigned int, float>(ii, score));
+      }
+    }
+  }
+
+  // Sort vector by score.
+  std::sort(candidates.begin(), candidates.end(), _CompareNorm);
+}
 
 
 
@@ -127,10 +187,10 @@ void Tracker::ConfigureBA(const calibu::CameraRig& rig)
   // so if this is set to true it will NOT change biases much.
   // If using datasets with no bias, set to true.
   options.regularize_biases_in_batch  = true;
-  options.use_triangular_matrices     = false;
+  options.use_triangular_matrices     = true;
   // NOTE(jfalquez) When this is set to true, and no IMU residuals are added
   // an error/warning shows up.
-  options.use_sparse_solver           = false;
+  options.use_sparse_solver           = true;
   options.use_dogleg                  = true;
 
   // IMU Sigmas.
@@ -212,7 +272,7 @@ void Tracker::Estimate(
   /// If BA has converged, integrate IMU measurements (if available) instead
   /// of doing full pyramid.
   bool use_pyramid = true;
-  if (ba_has_converged_) {
+  if (ba_has_converged_ && false) {
     // Get IMU measurements between keyframe and current frame.
     CHECK_LT(current_time_, time);
     std::vector<ImuMeasurement> imu_measurements =
@@ -266,7 +326,7 @@ void Tracker::Estimate(
   }
 
   LOG_IF(WARNING, dtrack_num_obs < (grey_image.cols*grey_image.rows*0.3))
-      << "Number of observations for DTrack is low!";
+      << "Number of observations for DTrack is less than 30%!";
 
   // Transfer covariance to IMU frame.
 //  dtrack_covariance = rel_pose_estimate.Adj().inverse() * dtrack_covariance
@@ -284,6 +344,21 @@ void Tracker::Estimate(
   dtrack_rel_pose.time_a      = current_time_;
   dtrack_rel_pose.time_b      = time;
   dtrack_window_.push_back(dtrack_rel_pose);
+
+  DTrackPoseOut dtrack_rel_pose_out;
+  dtrack_rel_pose_out.T_ab        = rel_pose_estimate;
+  dtrack_rel_pose_out.covariance  = dtrack_covariance;
+  dtrack_rel_pose_out.time_a      = current_time_;
+  dtrack_rel_pose_out.time_b      = time;
+  dtrack_rel_pose_out.grey_img    = grey_image.clone();
+  dtrack_rel_pose_out.depth_img   = depth_image.clone();
+  // Build pyramids.
+  std::vector<cv::Mat> pyramid;
+  const int thumb_level = 4;
+  cv::buildPyramid(grey_image, pyramid, thumb_level);
+  dtrack_rel_pose_out.thumbnail    = pyramid[thumb_level-1].clone();
+  dtrack_vector_.push_back(dtrack_rel_pose_out);
+
 
   // Set current frame as new keyframe.
   dtrack_.SetKeyframe(grey_image, depth_image);
@@ -401,6 +476,105 @@ void Tracker::Estimate(
 
   // Update return pose.
   global_pose = current_pose_;
+}
+
+
+///////////////////////////////////////////////////////////////////////////
+void Tracker::RunBatchBAwithLC()
+{
+  pose_relaxer_.Init(options_, dtrack_vector_.size(), dtrack_vector_.size()*5);
+
+  // Reset IMU residuals IDs.
+  imu_residual_ids_.clear();
+
+  ///-------------------- PUSH VO AND IMU CONSTRAINTS
+  // Push first pose and keep track of ID.
+  int cur_id, prev_id;
+  Sophus::SE3d global_pose;
+  DTrackPoseOut& dtrack_estimate = dtrack_vector_[0];
+  prev_id = pose_relaxer_.AddPose(global_pose, true, dtrack_estimate.time_a);
+
+  // Push rest of BA poses.
+  for (size_t ii = 1; ii < dtrack_vector_.size(); ++ii) {
+    DTrackPoseOut& dtrack_estimate = dtrack_vector_[ii-1];
+    global_pose = global_pose * dtrack_estimate.T_ab;
+
+    cur_id = pose_relaxer_.AddPose(global_pose, true, dtrack_estimate.time_b);
+
+    // Add VO constraint.
+    pose_relaxer_.AddBinaryConstraint(prev_id, cur_id,
+                                         dtrack_estimate.T_ab,
+                                         dtrack_estimate.covariance);
+
+#if 0
+    // Get IMU measurements between frames.
+    std::vector<ImuMeasurement> imu_measurements =
+        imu_buffer_.GetRange(dtrack_estimate.time_a, dtrack_estimate.time_b);
+
+    // Add IMU constraint.
+    imu_residual_ids_.push_back(
+          pose_relaxer_.AddImuResidual(prev_id, cur_id, imu_measurements));
+#endif
+
+    // Update pose IDs.
+    prev_id = cur_id;
+  }
+
+
+  ///-------------------- CHECK LOOP CLOSURES AND ADD LC CONSTRAINTS
+
+  for (size_t ii = 0; ii < dtrack_vector_.size(); ++ii) {
+    DTrackPoseOut& dtrack_estimate = dtrack_vector_[ii];
+
+    std::vector<std::pair<unsigned int, float> > candidates;
+    FindLoopClosureCandidates(/*30*/1000, ii, dtrack_estimate.thumbnail,
+                              5.0, candidates);
+
+#if 0
+    if (!candidates.empty()) {
+      cv::imshow("Keyframe", dtrack_estimate.grey_img);
+      for (size_t ii = 0; ii < candidates.size(); ++ii) {
+        int index = std::get<0>(candidates[ii]);
+        DTrackPoseOut& dtrack_match = dtrack_vector_[index];
+        cv::imshow("Match", dtrack_match.grey_img);
+        cv::waitKey(5000);
+      }
+    }
+#endif
+
+    // If loop closure candidates found, chose the "best" one and track against it.
+    if (!candidates.empty()) {
+      dtrack_.SetKeyframe(dtrack_estimate.grey_img, dtrack_estimate.depth_img);
+
+      int index = std::get<0>(candidates[0]);
+      DTrackPoseOut& dtrack_match = dtrack_vector_[index];
+
+      double              dtrack_error;
+      Sophus::SE3d        Trl;
+      unsigned int        dtrack_num_obs;
+      Eigen::Matrix6d     dtrack_covariance;
+      dtrack_error = dtrack_.Estimate(true, dtrack_match.grey_img, Trl,
+                                      dtrack_covariance, dtrack_num_obs,
+                                      dtrack_match.depth_img);
+
+      // Transfer relative pose to IMU frame.
+      Trl = Tic_ * Trl * Tic_.inverse();
+
+      // If tracking error is less than threshold, accept as loop closure.
+      if (dtrack_error < 15.0) {
+        LOG(INFO) << "Loop closure found!";
+        pose_relaxer_.AddBinaryConstraint(ii, index, Trl, dtrack_covariance);
+#if 0
+        cv::imshow("Keyframe", dtrack_estimate.grey_img);
+        cv::imshow("Match", dtrack_match.grey_img);
+        cv::waitKey(8000);
+#endif
+      }
+    }
+  }
+
+  // Solve.
+  pose_relaxer_.Solve(1000, 1.0, false);
 }
 
 
