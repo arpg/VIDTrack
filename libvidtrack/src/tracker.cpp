@@ -345,21 +345,6 @@ void Tracker::Estimate(
   dtrack_rel_pose.time_b      = time;
   dtrack_window_.push_back(dtrack_rel_pose);
 
-  DTrackPoseOut dtrack_rel_pose_out;
-  dtrack_rel_pose_out.T_ab        = rel_pose_estimate;
-  dtrack_rel_pose_out.covariance  = dtrack_covariance;
-  dtrack_rel_pose_out.time_a      = current_time_;
-  dtrack_rel_pose_out.time_b      = time;
-  dtrack_rel_pose_out.grey_img    = grey_image.clone();
-  dtrack_rel_pose_out.depth_img   = depth_image.clone();
-  // Build pyramids.
-  std::vector<cv::Mat> pyramid;
-  const int thumb_level = 4;
-  cv::buildPyramid(grey_image, pyramid, thumb_level);
-  dtrack_rel_pose_out.thumbnail    = pyramid[thumb_level-1].clone();
-  dtrack_vector_.push_back(dtrack_rel_pose_out);
-
-
   // Set current frame as new keyframe.
   dtrack_.SetKeyframe(grey_image, depth_image);
 
@@ -476,6 +461,21 @@ void Tracker::Estimate(
 
   // Update return pose.
   global_pose = current_pose_;
+
+  // "Map".
+  DTrackPoseOut dtrack_rel_pose_out;
+  dtrack_rel_pose_out.T_ab        = rel_pose;
+  dtrack_rel_pose_out.covariance  = dtrack_covariance;
+  dtrack_rel_pose_out.time_a      = current_time_;
+  dtrack_rel_pose_out.time_b      = time;
+  dtrack_rel_pose_out.grey_img    = grey_image.clone();
+  dtrack_rel_pose_out.depth_img   = depth_image.clone();
+  // Build pyramids.
+  std::vector<cv::Mat> pyramid;
+  const int thumb_level = 4;
+  cv::buildPyramid(grey_image, pyramid, thumb_level);
+  dtrack_rel_pose_out.thumbnail    = pyramid[thumb_level-1].clone();
+  dtrack_vector_.push_back(dtrack_rel_pose_out);
 }
 
 
