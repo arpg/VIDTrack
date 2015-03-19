@@ -394,6 +394,10 @@ int main(int argc, char** argv)
   pangolin::RegisterKeyPressCallback('o',
                                        [&run_batch_ba] {
                                           run_batch_ba = !run_batch_ba; });
+
+  pangolin::RegisterKeyPressCallback('e',
+                                       [&vid_tracker] {
+                                          vid_tracker.ExportMap(); });
   // Container view handler.
   const char keyShowHide[] = {'1','2','3','4','5','6','7','8','9','0'};
   const char keySave[]     = {'!','@','#','$','%','^','&','*','(',')'};

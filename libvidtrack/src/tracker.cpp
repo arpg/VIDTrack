@@ -478,6 +478,45 @@ void Tracker::Estimate(
   dtrack_vector_.push_back(dtrack_rel_pose_out);
 }
 
+///////////////////////////////////////////////////////////////////////////
+void Tracker::ExportMap()
+{
+  std::ofstream fw;
+  fw.open("map/poses.txt");
+
+  for (size_t ii = 0; ii < dtrack_vector_.size(); ++ii) {
+    DTrackPoseOut& dtrack_pose = dtrack_vector_[ii];
+
+    // Export file of poses.
+    fw << T2Cart(dtrack_pose.T_wp.matrix()).transpose() << std::endl;
+
+    // Export grey and depth images.
+    const std::string depth_file_prefix = "map/depth_";
+    char index[10];
+    int  i_idx = static_cast<int>(ii);
+    sprintf(index, "%05d", i_idx);
+    std::string depth_filename;
+    depth_filename = depth_file_prefix + index + ".pdm";
+    std::ofstream file(depth_filename.c_str(), std::ios::out | std::ios::binary);
+    file << "P7" << std::endl;
+    file << dtrack_pose.depth_img.cols << " " << dtrack_pose.depth_img.rows << std::endl;
+    unsigned int size = dtrack_pose.depth_img.elemSize1()
+        * dtrack_pose.depth_img.rows * dtrack_pose.depth_img.cols;
+    file << 4294967295 << std::endl;
+    file.write((const char*)dtrack_pose.depth_img.data, size);
+    file.close();
+
+    // Save grey image.
+    std::string grey_prefix = "map/grey_";
+    std::string grey_filename;
+    grey_filename = grey_prefix + index + ".pgm";
+    cv::imwrite(grey_filename, dtrack_pose.grey_img);
+
+    std::cout << "-- Saving: " << depth_filename << " " <<
+              grey_filename << std::endl;
+  }
+}
+
 
 ///////////////////////////////////////////////////////////////////////////
 void Tracker::RunBatchBAwithLC()
@@ -575,6 +614,13 @@ void Tracker::RunBatchBAwithLC()
 
   // Solve.
   pose_relaxer_.Solve(1000, 1.0, false);
+
+  // Update adjusted poses.
+  for (size_t ii = 0; ii < pose_relaxer_.GetNumPoses(); ++ii) {
+    const ba::PoseT<double>& pose = pose_relaxer_.GetPose(ii);
+    DTrackPoseOut& dtrack_pose = dtrack_vector_[ii];
+    dtrack_pose.T_wp = pose.t_wp;
+  }
 }
 
 

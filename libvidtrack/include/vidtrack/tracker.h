@@ -171,6 +171,8 @@ public:
       std::vector<std::pair<unsigned int, float> >&   candidates
     );
 
+  void ExportMap();
+
 
   ///
   ///////////////////////////////////////////////////////////////////////////
@@ -186,6 +188,7 @@ public:
 
   // Hack because of stupid deadlines like usual.
   struct DTrackPoseOut {
+    Sophus::SE3d      T_wp;
     Sophus::SE3d      T_ab;
     double            time_a;
     double            time_b;
