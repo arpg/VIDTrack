@@ -310,13 +310,9 @@ int main(int argc, char** argv)
 
   ///----- Aux variables.
   Sophus::SE3d  current_pose;
+  int           current_map_id;
   double        current_time;
-  cv::Mat       current_left_image, current_depth_map;
-
-  // If map is used, find where we initially are and set current_pose.
-  if (use_map) {
-
-  }
+  cv::Mat       current_grey_image, current_depth_map;
 
   ///----- Load file of ground truth poses (optional).
   bool have_gt;
@@ -496,7 +492,7 @@ int main(int argc, char** argv)
       capture_flag = camera.Capture(*images);
 
       // Set images.
-      current_left_image = images->at(0)->Mat().clone();
+      current_grey_image = images->at(0)->Mat().clone();
       current_depth_map = images->at(1)->Mat().clone();
 
       // Post-process images.
@@ -508,8 +504,18 @@ int main(int argc, char** argv)
 
       // Init VIDTrack.
       vid_tracker.ConfigureBA(old_rig);
-      vid_tracker.ConfigureDTrack(current_left_image, current_depth_map,
+      vid_tracker.ConfigureDTrack(current_grey_image, current_depth_map,
                                   current_time, old_rig.cameras[0].camera);
+
+      // If map is used, find where we initially are and set current_pose.
+      if (use_map) {
+        const bool ret = vid_tracker.WhereAmI(current_grey_image, current_map_id,
+                                              current_pose);
+        if (ret ==  false) {
+          std::cerr << "Could not find suitable match in map for initial pose estimate!" << std::endl;
+          exit(EXIT_FAILURE);
+        }
+      }
 
       // Increment frame counter.
       frame_index++;
@@ -529,7 +535,7 @@ int main(int argc, char** argv)
         paused = true;
       } else {
         // Set images.
-        current_left_image = images->at(0)->Mat().clone();
+        current_grey_image = images->at(0)->Mat().clone();
         current_depth_map = images->at(1)->Mat().clone();
 
         // Post-process images.
@@ -542,7 +548,7 @@ int main(int argc, char** argv)
         // Get pose for this image.
         timer.Tic("Tracker");
         Sophus::SE3d rel_pose, vo;
-        vid_tracker.Estimate(current_left_image, current_depth_map,
+        vid_tracker.Estimate(current_grey_image, current_depth_map,
                            current_time, ba_global_pose, rel_pose, vo);
 
         // Uncomment this if poses are to be seen in vision and camera frame.
@@ -609,7 +615,7 @@ int main(int argc, char** argv)
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     if (capture_flag) {
-      image_view.SetImage(current_left_image.data, image_width, image_height,
+      image_view.SetImage(current_grey_image.data, image_width, image_height,
                           GL_RGB8, GL_LUMINANCE, GL_UNSIGNED_BYTE);
 
       depth_view.SetImage(current_depth_map.data, image_width, image_height,

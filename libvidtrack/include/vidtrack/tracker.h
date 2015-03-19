@@ -173,6 +173,12 @@ public:
 
   void ExportMap();
   void ImportMap(const std::string& map_path);
+  bool WhereAmI(
+      const cv::Mat&  image,
+      int&            frame_id,
+      Sophus::SE3d&   Twp
+    );
+  cv::Mat GenerateThumbnail(const cv::Mat& image);
 
 
   ///
@@ -233,6 +239,7 @@ private:
 
   /// DTrack variables.
   DTrack                                            dtrack_;
+  DTrack                                            dtrack_refine_;
   Sophus::SE3d                                      last_estimated_pose_;
   std::deque<DTrackPose>                            dtrack_window_;
 

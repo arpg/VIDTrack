@@ -139,7 +139,7 @@ void Tracker::FindLoopClosureCandidates(
   const float max_score = max_intensity_change
                           * (thumbnail.rows * thumbnail.cols);
   for (unsigned int ii = 0; ii < dtrack_vector_.size(); ++ii) {
-    if (abs(id - ii) > margin) {
+    if (abs(id - ii) >= margin) {
       DTrackPoseOut& dtrack_estimate = dtrack_vector_[ii];
 
       float score = ScoreImages<unsigned char>(thumbnail,
@@ -161,7 +161,7 @@ void Tracker::FindLoopClosureCandidates(
 Tracker::Tracker(unsigned int window_size, unsigned int pyramid_levels)
   : kWindowSize(window_size), kMinWindowSize(2), kPyramidLevels(pyramid_levels),
     config_ba_(false), config_dtrack_(false), ba_has_converged_(false),
-    dtrack_(pyramid_levels)
+    dtrack_(pyramid_levels), dtrack_refine_(pyramid_levels)
 {
 }
 
@@ -199,6 +199,7 @@ void Tracker::ConfigureDTrack(
   if (config_dtrack_) {
     LOG(WARNING) << "DTrack is already configured. Ignoring new configuration.";
   } else {
+    dtrack_refine_.SetParams(live_grey_cmod, ref_grey_cmod, ref_depth_cmod, Tgd);
     dtrack_.SetParams(live_grey_cmod, ref_grey_cmod, ref_depth_cmod, Tgd);
     dtrack_.SetKeyframe(keyframe_grey, keyframe_depth);
     current_time_ = time;
@@ -209,6 +210,16 @@ void Tracker::ConfigureDTrack(
     initial_pose.t_wp = Sophus::SE3d();
     initial_pose.time = time + kTimeOffset;
     ba_window_.push_back(initial_pose);
+
+    // NOTE(jfalquez) This first one is not used during optimization.
+    // It is only required to store the images of the first pose.
+    DTrackPoseOut dtrack_rel_pose_out;
+    dtrack_rel_pose_out.time_a      = 0;
+    dtrack_rel_pose_out.time_b      = 0;
+    dtrack_rel_pose_out.grey_img    = keyframe_grey.clone();
+    dtrack_rel_pose_out.depth_img   = keyframe_depth.clone();
+    dtrack_rel_pose_out.thumbnail   = GenerateThumbnail(keyframe_grey).clone();
+    dtrack_vector_.push_back(dtrack_rel_pose_out);
 
     config_dtrack_ = true;
   }
@@ -638,11 +649,11 @@ void Tracker::RunBatchBAwithLC()
   // Push first pose and keep track of ID.
   int cur_id, prev_id;
   Sophus::SE3d global_pose;
-  DTrackPoseOut& dtrack_estimate = dtrack_vector_[0];
+  DTrackPoseOut& dtrack_estimate = dtrack_vector_[1];
   prev_id = pose_relaxer_.AddPose(global_pose, true, dtrack_estimate.time_a);
 
   // Push rest of BA poses.
-  for (size_t ii = 1; ii < dtrack_vector_.size(); ++ii) {
+  for (size_t ii = 2; ii < dtrack_vector_.size(); ++ii) {
     DTrackPoseOut& dtrack_estimate = dtrack_vector_[ii-1];
     global_pose = global_pose * dtrack_estimate.T_ab;
 
@@ -731,6 +742,81 @@ void Tracker::RunBatchBAwithLC()
   }
 }
 
+///////////////////////////////////////////////////////////////////////////
+bool Tracker::WhereAmI(
+    const cv::Mat&  image,
+    int&            frame_id,
+    Sophus::SE3d&   Twp
+  )
+{
+  // Reset output.
+  frame_id = -1;
+  Twp = Sophus::SE3d();
+
+  cv::Mat thumbnail = GenerateThumbnail(image);
+
+  std::vector<std::pair<unsigned int, float> > candidates;
+  const float max_score = 5.0 * (thumbnail.rows * thumbnail.cols);
+  for (unsigned int ii = 0; ii < dtrack_map_.size(); ++ii) {
+    DTrackMap& map_frame = dtrack_map_[ii];
+
+    float score = ScoreImages<unsigned char>(thumbnail,
+                                             map_frame.thumbnail);
+
+    if (score < max_score) {
+      candidates.push_back(std::pair<unsigned int, float>(ii, score));
+    }
+  }
+
+  // Sort vector by score.
+  std::sort(candidates.begin(), candidates.end(), _CompareNorm);
+
+  // If loop closure candidates found, chose the "best" one and track against it.
+  if (candidates.empty()) {
+    return false;
+  } else {
+    int index = std::get<0>(candidates[0]);
+    DTrackMap& map_frame = dtrack_map_[index];
+
+    dtrack_refine_.SetKeyframe(map_frame.grey_img, map_frame.depth_img);
+
+    double              dtrack_error;
+    Sophus::SE3d        Tkc;
+    unsigned int        dtrack_num_obs;
+    Eigen::Matrix6d     dtrack_covariance;
+    dtrack_error = dtrack_refine_.Estimate(true, image, Tkc,
+                                    dtrack_covariance, dtrack_num_obs,
+                                    image);
+
+    // If tracking error is less than threshold, accept as loop closure.
+    if (dtrack_error > 15.0) {
+      return false;
+    } else {
+      frame_id = index;
+      Twp = map_frame.T_wp * Tkc;
+#if 0
+      std::cout << "-- ID: " << frame_id << std::endl;
+      std::cout << "-- Pose: " << T2Cart(Twp.matrix()).transpose() << std::endl;
+
+      cv::imshow("Image", image);
+      cv::imshow("Match", map_frame.grey_img);
+      cv::waitKey(15000);
+#endif
+      return true;
+    }
+  }
+}
+
+///////////////////////////////////////////////////////////////////////////
+cv::Mat Tracker::GenerateThumbnail(const cv::Mat& image)
+{
+  cv::Mat thumbnail;
+  const int thumb_level = 4;
+  std::vector<cv::Mat> pyramid;
+  cv::buildPyramid(image, pyramid, thumb_level);
+  thumbnail = pyramid[thumb_level-1].clone();
+  return thumbnail;
+}
 
 ///////////////////////////////////////////////////////////////////////////
 void Tracker::AddInertialMeasurement(
