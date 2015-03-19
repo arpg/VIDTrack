@@ -172,6 +172,7 @@ public:
     );
 
   void ExportMap();
+  void ImportMap(const std::string& map_path);
 
 
   ///
@@ -198,6 +199,14 @@ public:
     cv::Mat           thumbnail;
   };
   std::vector<DTrackPoseOut>                        dtrack_vector_;
+
+  struct DTrackMap {
+    Sophus::SE3d      T_wp;
+    cv::Mat           grey_img;
+    cv::Mat           depth_img;
+    cv::Mat           thumbnail;
+  };
+  std::vector<DTrackMap>                            dtrack_map_;
 
   typedef ba::ImuMeasurementT<double>   ImuMeasurement;
   ba::InterpolationBufferT<ImuMeasurement, double>  imu_buffer_;

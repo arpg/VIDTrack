@@ -150,6 +150,15 @@ int main(int argc, char** argv)
   GetPot cl_args(argc, argv);
   int frame_skip  = cl_args.follow(0, "-skip");
 
+  bool use_map = false;
+  std::string map_path = cl_args.follow("", "-map");
+  if (!map_path.empty()) {
+    // Import map.
+    vid_tracker.ImportMap(map_path);
+
+    // Set flag.
+    use_map = true;
+  }
 
   ///----- Initialize Camera.
   if (!cl_args.search("-cam")) {
@@ -300,8 +309,14 @@ int main(int argc, char** argv)
   calibu::CreateFromOldRig(&old_rig, &rig);
 
   ///----- Aux variables.
-  double  current_time;
-  cv::Mat current_left_image, current_depth_map;
+  Sophus::SE3d  current_pose;
+  double        current_time;
+  cv::Mat       current_left_image, current_depth_map;
+
+  // If map is used, find where we initially are and set current_pose.
+  if (use_map) {
+
+  }
 
   ///----- Load file of ground truth poses (optional).
   bool have_gt;
