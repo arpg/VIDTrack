@@ -172,13 +172,27 @@ public:
     );
 
   void ExportMap();
+
   void ImportMap(const std::string& map_path);
+
   bool WhereAmI(
       const cv::Mat&  image,
       int&            frame_id,
       Sophus::SE3d&   Twp
     );
+
   cv::Mat GenerateThumbnail(const cv::Mat& image);
+
+  void RefinePose(
+      const cv::Mat&    grey_image,
+      int               keyframe_id,
+      Sophus::SE3d&     Twp);
+
+  int FindClosestKeyframe(
+      int               last_frame_id,
+      Sophus::SE3d      Twp,
+      int               range
+    );
 
 
   ///

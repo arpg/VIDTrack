@@ -185,12 +185,13 @@ int main(int argc, char** argv)
     exit(EXIT_FAILURE);
   }
   hal::IMU imu(cl_args.follow("", "-imu"));
-  using std::placeholders::_1;
-  std::function<void (pb::ImuMsg&)> callback
-                    = std::bind(IMU_Handler, _1, &vid_tracker);
-  imu.RegisterIMUDataCallback(callback);
-  std::cout << "- Registering IMU device." << std::endl;
-
+  if (use_map == false) {
+    using std::placeholders::_1;
+    std::function<void (pb::ImuMsg&)> callback
+                      = std::bind(IMU_Handler, _1, &vid_tracker);
+    imu.RegisterIMUDataCallback(callback);
+    std::cout << "- Registering IMU device." << std::endl;
+  }
 
   ///----- Set up GUI.
   pangolin::CreateGlutWindowAndBind("VIDTrack", 1600, 800);
@@ -310,7 +311,7 @@ int main(int argc, char** argv)
 
   ///----- Aux variables.
   Sophus::SE3d  current_pose;
-  int           current_map_id;
+  int           current_keyframe_id;
   double        current_time;
   cv::Mat       current_grey_image, current_depth_map;
 
@@ -509,7 +510,7 @@ int main(int argc, char** argv)
 
       // If map is used, find where we initially are and set current_pose.
       if (use_map) {
-        const bool ret = vid_tracker.WhereAmI(current_grey_image, current_map_id,
+        const bool ret = vid_tracker.WhereAmI(current_grey_image, current_keyframe_id,
                                               current_pose);
         if (ret ==  false) {
           std::cerr << "Could not find suitable match in map for initial pose estimate!" << std::endl;
@@ -548,16 +549,29 @@ int main(int argc, char** argv)
         // Get pose for this image.
         timer.Tic("Tracker");
         Sophus::SE3d rel_pose, vo;
-        vid_tracker.Estimate(current_grey_image, current_depth_map,
-                           current_time, ba_global_pose, rel_pose, vo);
+        if (use_map) {
+          int keyframe_id = vid_tracker.FindClosestKeyframe(current_keyframe_id,
+                                                            current_pose, 500);
+//          std::cout << "Closest keyframe: " << keyframe_id << std::endl;
+          current_keyframe_id = keyframe_id;
+          vid_tracker.RefinePose(current_grey_image, current_keyframe_id,
+                                 current_pose);
+          ba_global_pose = current_pose;
+          ba_accum_rel_pose = current_pose;
+        } else {
+          vid_tracker.Estimate(current_grey_image, current_depth_map,
+                             current_time, ba_global_pose, rel_pose, vo);
 
-        // Uncomment this if poses are to be seen in vision and camera frame.
+          // Uncomment this if poses are to be seen in vision and camera frame.
 //        ba_accum_rel_pose *= Tic.inverse() * rel_pose * Tic;
-        // Uncomment this for regular robotic IMU frame.
-        ba_accum_rel_pose *= rel_pose;
+          // Uncomment this for regular robotic IMU frame.
+          ba_accum_rel_pose *= rel_pose;
 
-        vo_pose *= vo;
+          vo_pose *= vo;
+        }
         timer.Toc("Tracker");
+
+
 
         // Save poses.
         Eigen::Vector6d tmp = SceneGraph::GLT2Cart(ba_accum_rel_pose.matrix());

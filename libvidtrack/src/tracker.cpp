@@ -518,12 +518,97 @@ void Tracker::Estimate(
   dtrack_rel_pose_out.time_b      = time;
   dtrack_rel_pose_out.grey_img    = grey_image.clone();
   dtrack_rel_pose_out.depth_img   = depth_image.clone();
-  // Build pyramids.
-  std::vector<cv::Mat> pyramid;
-  const int thumb_level = 4;
-  cv::buildPyramid(grey_image, pyramid, thumb_level);
-  dtrack_rel_pose_out.thumbnail    = pyramid[thumb_level-1].clone();
+  dtrack_rel_pose_out.thumbnail   = GenerateThumbnail(grey_image).clone();
   dtrack_vector_.push_back(dtrack_rel_pose_out);
+}
+
+
+///////////////////////////////////////////////////////////////////////////
+void Tracker::RefinePose(
+    const cv::Mat&    grey_image,
+    int               keyframe_id,
+    Sophus::SE3d&     Twp
+  )
+{
+  // Localize against that keyframe. Potentially localize against previous
+  // keyframe too, for robustness. Refine with keyframes?
+  DTrackMap& map_frame = dtrack_map_[keyframe_id];
+
+  // Set keyframe.
+  dtrack_refine_.SetKeyframe(map_frame.grey_img, map_frame.depth_img);
+
+  // Find relative transform between current pose and keyframe.
+  Sophus::SE3d Tkc = map_frame.T_wp.inverse() * Twp;
+
+  // Set up robotic to vision permuation matrix.
+  Sophus::SE3d Trv;
+  Trv.so3() = calibu::RdfRobotics;
+
+  Tkc = Trv.inverse() * Tkc * Trv;
+
+  /// RGBD pose estimation.
+  unsigned int        dtrack_num_obs;
+  double              dtrack_error;
+  Eigen::Matrix6d     dtrack_covariance;
+
+  dtrack_error = dtrack_refine_.Estimate(true, grey_image, Tkc,
+                                  dtrack_covariance, dtrack_num_obs,
+                                  grey_image);
+
+  LOG_IF(WARNING, dtrack_num_obs < (grey_image.cols*grey_image.rows*0.3))
+      << "Number of observations for DTrack is less than 30%!";
+
+  Tkc = Trv * Tkc * Trv.inverse();
+
+  Twp = map_frame.T_wp * Tkc;
+}
+
+
+///////////////////////////////////////////////////////////////////////////
+int Tracker::FindClosestKeyframe(
+    int               last_frame_id,
+    Sophus::SE3d      Twp,
+    int               range
+  )
+{
+  DTrackMap& map_frame = dtrack_map_[last_frame_id];
+
+  int     closest_id = last_frame_id;
+  double  closest_distance = (Twp.inverse() * map_frame.T_wp).translation().norm();
+
+  int ii = last_frame_id;
+  int jj = last_frame_id;
+  // This doesn't take in consideration rotation.
+  for (int xx = 0; xx < range; ++xx) {
+    ii--;
+    jj++;
+
+    if (ii < 0) {
+      ii = dtrack_map_.size() - 1;
+    }
+    if (static_cast<size_t>(jj) >= dtrack_map_.size()) {
+      jj = 0;
+    }
+
+    if (ii == jj) {
+      break;
+    }
+
+    DTrackMap& map_frame_ii = dtrack_map_[ii];
+    double ii_distance = (Twp.inverse() * map_frame_ii.T_wp).translation().norm();
+    if (ii_distance < closest_distance) {
+      closest_distance = ii_distance;
+      closest_id = ii;
+    }
+
+    DTrackMap& map_frame_jj = dtrack_map_[jj];
+    double jj_distance = (Twp.inverse() * map_frame_jj.T_wp).translation().norm();
+    if (jj_distance < closest_distance) {
+      closest_distance = jj_distance;
+      closest_id = jj;
+    }
+  }
+  return closest_id;
 }
 
 ///////////////////////////////////////////////////////////////////////////
