@@ -182,14 +182,15 @@ int main(int argc, char** argv)
   ///----- Initialize IMU.
   if (!cl_args.search("-imu")) {
     std::cerr << "IMU arguments missing!" << std::endl;
-    exit(EXIT_FAILURE);
+//    exit(EXIT_FAILURE);
   }
-  hal::IMU imu(cl_args.follow("", "-imu"));
+  hal::IMU imu;
   if (use_map == false) {
+//    imu = hal::IMU(cl_args.follow("", "-imu"));
     using std::placeholders::_1;
     std::function<void (pb::ImuMsg&)> callback
                       = std::bind(IMU_Handler, _1, &vid_tracker);
-    imu.RegisterIMUDataCallback(callback);
+//    imu.RegisterIMUDataCallback(callback);
     std::cout << "- Registering IMU device." << std::endl;
   }
 
@@ -201,7 +202,7 @@ int main(int argc, char** argv)
   pangolin::CreatePanel("ui").SetBounds(0, 1, 0, pangolin::Attach::Pix(panel_size));
   pangolin::Var<bool>           ui_camera_follow("ui.Camera Follow", false, true);
   pangolin::Var<bool>           ui_reset("ui.Reset", true, false);
-  pangolin::Var<bool>           ui_show_vo_path("ui.Show VO Path", true, true);
+  pangolin::Var<bool>           ui_show_vo_path("ui.Show VO Path", false, true);
   pangolin::Var<bool>           ui_show_ba_path("ui.Show BA Path", false, true);
   pangolin::Var<bool>           ui_show_ba_rel_path("ui.Show BA Rel Path", true, true);
   pangolin::Var<bool>           ui_show_ba_win_path("ui.Show BA Win Path", false, true);
@@ -385,6 +386,77 @@ int main(int argc, char** argv)
       fclose(fd);
       have_gt = true;
     }
+    // This is the file provided by Mike.
+    // It supercedes the original "-pose" argument.
+    // Convert camera position, look at, and up into a pose.
+    pose_file = cl_args.follow("", "-poses2");
+    if (pose_file.empty() == false) {
+      poses.clear();
+
+      pose_file = camera.GetDeviceProperty(hal::DeviceDirectory) + "/" + pose_file;
+      FILE* fd = fopen(pose_file.c_str(), "r");
+      float cx, cy, cz, lx, ly, lz, ux, uy, uz;
+
+      while (fscanf(fd, "%f,%f,%f,%f,%f,%f,%f,%f,%f",
+                        &cx, &cy, &cz, &lx, &ly, &lz, &ux, &uy, &uz) != EOF) {
+
+
+        Eigen::Vector3d z;
+        z(0) = lx - cx;
+        z(1) = ly - cy;
+        z(2) = lz - cz;
+
+        z.normalize();
+
+        Eigen::Vector3d u;
+        u << ux, uy, uz;
+
+        Eigen::Vector3d x;
+        x = u.cross(z);
+        x.normalize();
+
+        Eigen::Vector3d y;
+        y = z.cross(x);
+
+        Eigen::Matrix3d R;
+        R.block<3,1>(0,0) = x;
+        R.block<3,1>(0,1) = y;
+        R.block<3,1>(0,2) = z;
+
+        Eigen::Vector3d cam_center;
+        cam_center << cx, cy, cz;
+
+        Eigen::Matrix4d cam_pose;
+        cam_pose.setIdentity();
+        cam_pose.block<3,3>(0,0) = R;
+        cam_pose.block<3,1>(0,3) = cam_center;
+
+        Sophus::SE3d T(cam_pose);
+
+        // RDF of POVray
+        Eigen::Matrix3d RDF_pov;
+        RDF_pov << 1,  0,  0,
+                   0, -1,  0,
+                   0,  0,  1;
+
+        // RDF of robotics.
+        Eigen::Matrix3d RDF_rob;
+        RDF_rob << 0,  0,  1,
+                   1,  0,  0,
+                   0,  1,  0;
+
+        Eigen::Matrix3d T_pov_rob = Eigen::Matrix3d::Identity();
+        T_pov_rob = RDF_pov.transpose() * RDF_rob;
+        Sophus::SO3d rdf(T_pov_rob);
+
+        poses.push_back(calibu::ToCoordinateConvention(T, rdf.inverse()));
+      }
+
+      std::cout << "- NOTE: " << poses.size() << " poses loaded." << std::endl;
+      fclose(fd);
+      have_gt = true;
+      ui_show_gt_path = true;
+    }
   }
 
   ///----- Register callbacks.
@@ -438,9 +510,10 @@ int main(int argc, char** argv)
   std::shared_ptr<pb::ImageArray> images = pb::ImageArray::Create();
 
   // IMU-Camera transform through robotic to vision conversion.
+  Sophus::SE3d Tic = rig.t_wc_[0];
   Sophus::SE3d Trv;
   Trv.so3() = calibu::RdfRobotics;
-  Sophus::SE3d Tic = rig.t_wc_[0] * Trv;
+  Sophus::SE3d Ticv = rig.t_wc_[0] * Trv;
 
   // Open file for saving poses.
   std::ofstream output_file;
@@ -496,9 +569,27 @@ int main(int argc, char** argv)
       current_grey_image = images->at(0)->Mat().clone();
       current_depth_map = images->at(1)->Mat().clone();
 
+#if 0
+      double min, max;
+      cv::minMaxLoc(current_depth_map, &min, &max, nullptr, nullptr);
+      std::cout << "Min depth: " << min << "-- Max depth: " << max << std::endl;
+#endif
+
       // Post-process images.
       cv::Mat maskNAN = cv::Mat(current_depth_map != current_depth_map);
       current_depth_map.setTo(0, maskNAN);
+      // Trim left-most margin.
+      for (size_t ii = 0; ii < image_height; ++ii) {
+        for (size_t jj = 0; jj < 20; ++jj) {
+//          current_depth_map.at<float>(ii, jj) = 0;
+        }
+      }
+
+      // Depth map sanity check.
+      int non_zero = cv::countNonZero(current_depth_map);
+      if (non_zero < image_height*image_width*0.5) {
+        std::cerr << "warning: Depth map is less than 50% complete!" << std::endl;
+      }
 
       // Get current time.
       current_time = images->at(0)->Timestamp();
@@ -517,6 +608,7 @@ int main(int argc, char** argv)
           exit(EXIT_FAILURE);
         }
       }
+
 
       // Increment frame counter.
       frame_index++;
@@ -542,6 +634,18 @@ int main(int argc, char** argv)
         // Post-process images.
         cv::Mat maskNAN = cv::Mat(current_depth_map != current_depth_map);
         current_depth_map.setTo(0, maskNAN);
+        // Trim left-most margin.
+        for (size_t ii = 0; ii < image_height; ++ii) {
+          for (size_t jj = 0; jj < 20; ++jj) {
+//            current_depth_map.at<float>(ii, jj) = 0;
+          }
+        }
+
+        // Depth map sanity check.
+        int non_zero = cv::countNonZero(current_depth_map);
+        if (non_zero < image_height*image_width*0.5) {
+          std::cerr << "warning: Depth map is less than 50% complete!" << std::endl;
+        }
 
         // Get current time.
         current_time = images->at(0)->Timestamp();
@@ -562,12 +666,15 @@ int main(int argc, char** argv)
           vid_tracker.Estimate(current_grey_image, current_depth_map,
                              current_time, ba_global_pose, rel_pose, vo);
 
-          // Uncomment this if poses are to be seen in vision and camera frame.
-//        ba_accum_rel_pose *= Tic.inverse() * rel_pose * Tic;
+          // Uncomment this if poses are to be seen in camera frame (robotics).
+          ba_accum_rel_pose *= Tic.inverse() * rel_pose * Tic;
+          // Uncomment this if poses are to be seen in camera frame (vision).
+//          ba_accum_rel_pose *= Ticv.inverse() * rel_pose * Ticv;
           // Uncomment this for regular robotic IMU frame.
-          ba_accum_rel_pose *= rel_pose;
+//          ba_accum_rel_pose *= rel_pose;
 
-          vo_pose *= vo;
+//          vo_pose *= vo;
+          vo_pose *= Ticv.inverse() * vo * Ticv;
         }
         timer.Toc("Tracker");
 

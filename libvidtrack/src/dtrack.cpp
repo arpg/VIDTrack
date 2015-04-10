@@ -300,7 +300,8 @@ public:
 
       ///-------------------- Robust Norm
       // Depth sigma added.
-      const double w = _NormTukey(y, norm_param_) * (1.0/(depth*depth));
+//      const double w = _NormTukey(y, norm_param_) * (1.0/(depth*depth));
+      const double w = _NormTukey(y, norm_param_);
 
       hessian     += J.transpose() * w * J;
       LHS         += J.transpose() * w * J;
@@ -450,7 +451,7 @@ double DTrack::Estimate(
   const double norm_c            = 10.0;
   const double norm_cd           = 0.20;
   const bool   discard_saturated = true;
-  const float  min_depth         = 0.20;
+  const float  min_depth         = 0.10;
   const float  max_depth         = 20.0;
 
   // Set pyramid max-iterations and full estimate mask.
@@ -473,14 +474,15 @@ double DTrack::Estimate(
   CHECK_EQ(vec_max_iterations.size(), kPyramidLevels);
 
   // Build live pyramid.
-  /*
+#if 1
   cv::Mat live_grey_copy = live_grey.clone();
-  _BrightnessCorrectionImagePairF(reinterpret_cast<float*>(live_grey_copy.data),
-                                  reinterpret_cast<float*>(ref_grey_pyramid_[0].data),
-                                  live_grey_copy.cols*live_grey_copy.rows);
+  _BrightnessCorrectionImagePair(live_grey_copy.data,
+                                 ref_grey_pyramid_[0].data,
+                                 live_grey_copy.cols*live_grey_copy.rows);
   cv::buildPyramid(live_grey_copy, live_grey_pyramid_, kPyramidLevels);
-  */
+#else
   cv::buildPyramid(live_grey, live_grey_pyramid_, kPyramidLevels);
+#endif
   cv::buildPyramid(live_depth, live_depth_pyramid_, kPyramidLevels);
 
   // Aux variables.

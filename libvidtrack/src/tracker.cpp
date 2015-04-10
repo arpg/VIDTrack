@@ -411,7 +411,7 @@ void Tracker::Estimate(
 
   ///--------------------
   /// Windowed BA.
-  if (dtrack_window_.size() >= kMinWindowSize) {
+  if (dtrack_window_.size() >= kMinWindowSize && false) {
     // Sanity check.
     CHECK_EQ(ba_window_.size(), dtrack_window_.size()+1)
         << "BA: " << ba_window_.size() << " DTrack: " << dtrack_window_.size();
@@ -770,8 +770,8 @@ void Tracker::RunBatchBAwithLC()
     DTrackPoseOut& dtrack_estimate = dtrack_vector_[ii];
 
     std::vector<std::pair<unsigned int, float> > candidates;
-    FindLoopClosureCandidates(/*30*/1000, ii, dtrack_estimate.thumbnail,
-                              5.0, candidates);
+    FindLoopClosureCandidates(30, ii, dtrack_estimate.thumbnail,
+                              10.0, candidates);
 
 #if 0
     if (!candidates.empty()) {
