@@ -75,18 +75,17 @@ public:
 
   ///////////////////////////////////////////////////////////////////////////
   void SetKeyframe(
-      const cv::Mat&    ref_grey,  // Input: Reference image (float format, normalized).
+      const cv::Mat&    ref_grey,  // Input: Reference image (unsigned char format).
       const cv::Mat&    ref_depth  // Input: Reference depth (float format, meters).
       );
 
   ///////////////////////////////////////////////////////////////////////////
   double Estimate(
       bool                      use_pyramid,  // Input: Flag to enable full pyramid.
-      const cv::Mat&            live_grey,    // Input: Live image (float format, normalized).
+      const cv::Mat&            live_grey,    // Input: Live image (unsigned char format).
       Sophus::SE3Group<double>& Trl,          // Input/Output: Transform between grey cameras (vision frame/input is hint).
       Eigen::Matrix6d&          covariance,   // Output: Covariance.
-      unsigned int&             num_obs,      // Output: Number of observations.
-      const cv::Mat&            live_depth
+      unsigned int&             num_obs       // Output: Number of observations.
     );
 
 private:

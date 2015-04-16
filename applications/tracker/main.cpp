@@ -182,15 +182,15 @@ int main(int argc, char** argv)
   ///----- Initialize IMU.
   if (!cl_args.search("-imu")) {
     std::cerr << "IMU arguments missing!" << std::endl;
-//    exit(EXIT_FAILURE);
+    exit(EXIT_FAILURE);
   }
   hal::IMU imu;
   if (use_map == false) {
-//    imu = hal::IMU(cl_args.follow("", "-imu"));
+    imu = hal::IMU(cl_args.follow("", "-imu"));
     using std::placeholders::_1;
     std::function<void (pb::ImuMsg&)> callback
                       = std::bind(IMU_Handler, _1, &vid_tracker);
-//    imu.RegisterIMUDataCallback(callback);
+    imu.RegisterIMUDataCallback(callback);
     std::cout << "- Registering IMU device." << std::endl;
   }
 
@@ -400,23 +400,22 @@ int main(int argc, char** argv)
       while (fscanf(fd, "%f,%f,%f,%f,%f,%f,%f,%f,%f",
                         &cx, &cy, &cz, &lx, &ly, &lz, &ux, &uy, &uz) != EOF) {
 
+        Eigen::Vector3d x;
+        x(0) = lx - cx;
+        x(1) = ly - cy;
+        x(2) = lz - cz;
 
-        Eigen::Vector3d z;
-        z(0) = lx - cx;
-        z(1) = ly - cy;
-        z(2) = lz - cz;
-
-        z.normalize();
+        x.normalize();
 
         Eigen::Vector3d u;
         u << ux, uy, uz;
 
-        Eigen::Vector3d x;
-        x = u.cross(z);
-        x.normalize();
-
         Eigen::Vector3d y;
-        y = z.cross(x);
+        y = x.cross(u);
+        y.normalize();
+
+        Eigen::Vector3d z;
+        z = x.cross(y);
 
         Eigen::Matrix3d R;
         R.block<3,1>(0,0) = x;
@@ -433,23 +432,7 @@ int main(int argc, char** argv)
 
         Sophus::SE3d T(cam_pose);
 
-        // RDF of POVray
-        Eigen::Matrix3d RDF_pov;
-        RDF_pov << 1,  0,  0,
-                   0, -1,  0,
-                   0,  0,  1;
-
-        // RDF of robotics.
-        Eigen::Matrix3d RDF_rob;
-        RDF_rob << 0,  0,  1,
-                   1,  0,  0,
-                   0,  1,  0;
-
-        Eigen::Matrix3d T_pov_rob = Eigen::Matrix3d::Identity();
-        T_pov_rob = RDF_pov.transpose() * RDF_rob;
-        Sophus::SO3d rdf(T_pov_rob);
-
-        poses.push_back(calibu::ToCoordinateConvention(T, rdf.inverse()));
+        poses.push_back(T);
       }
 
       std::cout << "- NOTE: " << poses.size() << " poses loaded." << std::endl;
@@ -568,6 +551,8 @@ int main(int argc, char** argv)
       // Set images.
       current_grey_image = images->at(0)->Mat().clone();
       current_depth_map = images->at(1)->Mat().clone();
+//      cv::flip(current_grey_image, current_grey_image, 1);
+//      cv::flip(current_depth_map, current_depth_map, 1);
 
 #if 0
       double min, max;
@@ -630,6 +615,8 @@ int main(int argc, char** argv)
         // Set images.
         current_grey_image = images->at(0)->Mat().clone();
         current_depth_map = images->at(1)->Mat().clone();
+//        cv::flip(current_grey_image, current_grey_image, 1);
+//        cv::flip(current_depth_map, current_depth_map, 1);
 
         // Post-process images.
         cv::Mat maskNAN = cv::Mat(current_depth_map != current_depth_map);
@@ -667,14 +654,13 @@ int main(int argc, char** argv)
                              current_time, ba_global_pose, rel_pose, vo);
 
           // Uncomment this if poses are to be seen in camera frame (robotics).
-          ba_accum_rel_pose *= Tic.inverse() * rel_pose * Tic;
+//          ba_accum_rel_pose *= Tic.inverse() * rel_pose * Tic;
           // Uncomment this if poses are to be seen in camera frame (vision).
 //          ba_accum_rel_pose *= Ticv.inverse() * rel_pose * Ticv;
           // Uncomment this for regular robotic IMU frame.
-//          ba_accum_rel_pose *= rel_pose;
+          ba_accum_rel_pose *= rel_pose;
 
-//          vo_pose *= vo;
-          vo_pose *= Ticv.inverse() * vo * Ticv;
+          vo_pose *= vo;
         }
         timer.Toc("Tracker");
 
@@ -687,8 +673,10 @@ int main(int argc, char** argv)
 
         ///----- Update GUI objects.
         // Update poses.
+        Sophus::SE3d gt_pose;
         if (have_gt) {
-          Sophus::SE3d gt_pose = (poses[0].inverse() * poses[frame_index]);
+          gt_pose = ((poses[0] * Tic.inverse()).inverse() * poses[frame_index] * Tic.inverse());
+//          gt_pose = poses[0].inverse() * poses[frame_index];
           // Update errors.
           analytics["BA Global Path Error"] =
               Sophus::SE3::log(ba_global_pose.inverse() * gt_pose).head(3).norm();
@@ -703,7 +691,7 @@ int main(int argc, char** argv)
         path_ba_vec.push_back(ba_global_pose);
         path_ba_rel_vec.push_back(ba_accum_rel_pose);
         if (have_gt) {
-          path_gt_vec.push_back(poses[0].inverse()*poses[frame_index]);
+          path_gt_vec.push_back(gt_pose);
         }
         path_ba_win_vec.clear();
         const std::deque<ba::PoseT<double> > ba_poses = vid_tracker.GetAdjustedPoses();

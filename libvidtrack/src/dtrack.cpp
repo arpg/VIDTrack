@@ -74,7 +74,6 @@ public:
   ///////////////////////////////////////////////////////////////////////////
   PoseRefine(
       const cv::Mat&           live_grey,
-      const cv::Mat&           live_depth,
       const cv::Mat&           ref_grey,
       const cv::Mat&           ref_depth,
       const Eigen::Matrix3d&   Klg,
@@ -91,7 +90,6 @@ public:
     error(0),
     num_obs(0),
     live_grey_(live_grey),
-    live_depth_(live_depth),
     ref_grey_(ref_grey),
     ref_depth_(ref_depth),
     Klg_(Klg),
@@ -118,7 +116,6 @@ public:
     error(0),
     num_obs(0),
     live_grey_(x.live_grey_),
-    live_depth_(x.live_depth_),
     ref_grey_(x.ref_grey_),
     ref_depth_(x.ref_depth_),
     Klg_(x.Klg_),
@@ -214,31 +211,6 @@ public:
 
       // Calculate photometric error.
       const double y = Il-Ir;
-
-      /*
-      // Calculate depth error.
-      const float Dl =
-          interp(pl_g(0), pl_g(1),
-                 reinterpret_cast<float*>(live_depth_.data), live_depth_.cols,
-                 live_depth_.rows);
-      const float Dr_warped = hPl_g(2);
-
-      // Regularized error.
-      double y_reg =  y;
-      if (regularize) {
-      const double y_reg = y + fabs(Dl-Dr_warped);
-      }
-
-      if (u == 10 && v == 10) {
-        std::cout << "Img Width: " << live_depth_.cols << std::endl;
-        std::cout << "Original Depth: " << depth << std::endl;
-        std::cout << "Depth Warped: " << Dr_warped << std::endl;
-        std::cout << "Depth Live: " << Dl << std::endl;
-        std::cout << "Reporjected Pix: " << pl_g.transpose() << std::endl;
-        std::cout << "Depth at Pix: " << live_depth_.at<float>(pl_g(0), pl_g(1)) << std::endl;
-        std::cout << "Depth Error: " << fabs(Dl-Dr_warped) << std::endl;
-      }
-      */
 
       ///-------------------- Forward Compositional
       // Image derivative.
@@ -345,7 +317,6 @@ public:
 
 private:
   cv::Mat           live_grey_;
-  cv::Mat           live_depth_;
   cv::Mat           ref_grey_;
   cv::Mat           ref_depth_;
   Eigen::Matrix3d   Klg_;
@@ -438,8 +409,7 @@ double DTrack::Estimate(
     const cv::Mat&            live_grey,
     Sophus::SE3Group<double>& Trl,
     Eigen::Matrix6d&          covariance,
-    unsigned int&             num_obs,
-    const cv::Mat&            live_depth
+    unsigned int&             num_obs
   )
 {
   // Reset output parameters.
@@ -449,7 +419,6 @@ double DTrack::Estimate(
   // TODO(jfalquez) Pass this options in Config method to avoid re-initializing.
   // Options.
   const double norm_c            = 10.0;
-  const double norm_cd           = 0.20;
   const bool   discard_saturated = true;
   const float  min_depth         = 0.10;
   const float  max_depth         = 20.0;
@@ -470,8 +439,8 @@ double DTrack::Estimate(
 #endif
   }
 
-  CHECK_EQ(vec_full_estimate.size(), kPyramidLevels);
-  CHECK_EQ(vec_max_iterations.size(), kPyramidLevels);
+  CHECK_GE(vec_full_estimate.size(), kPyramidLevels);
+  CHECK_GE(vec_max_iterations.size(), kPyramidLevels);
 
   // Build live pyramid.
 #if 1
@@ -483,7 +452,6 @@ double DTrack::Estimate(
 #else
   cv::buildPyramid(live_grey, live_grey_pyramid_, kPyramidLevels);
 #endif
-  cv::buildPyramid(live_depth, live_depth_pyramid_, kPyramidLevels);
 
   // Aux variables.
   Eigen::Matrix6d   hessian;
@@ -496,7 +464,6 @@ double DTrack::Estimate(
   // Iterate through pyramid levels.
   for (int pyramid_lvl = kPyramidLevels-1; pyramid_lvl >= 0; pyramid_lvl--) {
     const cv::Mat& live_grey_img = live_grey_pyramid_[pyramid_lvl];
-    const cv::Mat& live_depth_img = live_depth_pyramid_[pyramid_lvl];
     const cv::Mat& ref_grey_img  = ref_grey_pyramid_[pyramid_lvl];
     const cv::Mat& ref_depth_img = ref_depth_pyramid_[pyramid_lvl];
 
@@ -526,7 +493,6 @@ double DTrack::Estimate(
 
     // Set pyramid norm parameter.
     const double norm_c_pyr = norm_c*(pyramid_lvl+1);
-    const double norm_cd_pyr = norm_cd*(pyramid_lvl+1);
 
     for (unsigned int num_iters = 0;
          num_iters < vec_max_iterations[pyramid_lvl];
@@ -555,7 +521,7 @@ double DTrack::Estimate(
                            norm_c_pyr, discard_saturated, min_depth, max_depth);
 #elif defined(VIDTRACK_USE_TBB)
       // Launch TBB.
-      PoseRefine pose_ref(live_grey_img, live_depth_img, ref_grey_img,
+      PoseRefine pose_ref(live_grey_img, ref_grey_img,
                           ref_depth_img, Klg, Krg, Krd, Tgd_.matrix(),
                           Tlr.matrix(), KlgTlr, norm_c_pyr, discard_saturated,
                           min_depth, max_depth);
@@ -752,7 +718,6 @@ double DTrack::Estimate(
 
         // Set covariance output.
         covariance = hessian.inverse();
-        covariance *= number_observations;
 
         // Update Trl.
         Trl = (Tlr*Sophus::SE3Group<double>::exp(X)).inverse();

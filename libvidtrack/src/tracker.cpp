@@ -320,7 +320,7 @@ void Tracker::Estimate(
   /// If BA has converged, integrate IMU measurements (if available) instead
   /// of doing full pyramid.
   bool use_pyramid = true;
-  if (ba_has_converged_ && false) {
+  if (ba_has_converged_) {
     // Get IMU measurements between keyframe and current frame.
     CHECK_LT(current_time_, time);
     std::vector<ImuMeasurement> imu_measurements =
@@ -365,12 +365,10 @@ void Tracker::Estimate(
     // place to add it before calling DTrack's estimate. Do not use it on the
     // else statement, since rel_pose_estimate should have IMU integration.
     dtrack_error = dtrack_.Estimate(true, grey_image, rel_pose_estimate,
-                                    dtrack_covariance, dtrack_num_obs,
-                                    depth_image);
+                                    dtrack_covariance, dtrack_num_obs);
   } else {
     dtrack_error = dtrack_.Estimate(false, grey_image, rel_pose_estimate,
-                                    dtrack_covariance, dtrack_num_obs,
-                                    depth_image);
+                                    dtrack_covariance, dtrack_num_obs);
   }
 
   LOG_IF(WARNING, dtrack_num_obs < (grey_image.cols*grey_image.rows*0.3))
@@ -388,7 +386,7 @@ void Tracker::Estimate(
   // Push pose estimate into DTrack window.
   DTrackPose dtrack_rel_pose;
   dtrack_rel_pose.T_ab        = rel_pose_estimate;
-  dtrack_rel_pose.covariance  = dtrack_covariance;
+  dtrack_rel_pose.covariance  = dtrack_covariance * 1e5;
   dtrack_rel_pose.time_a      = current_time_;
   dtrack_rel_pose.time_b      = time;
   dtrack_window_.push_back(dtrack_rel_pose);
@@ -552,8 +550,7 @@ void Tracker::RefinePose(
   Eigen::Matrix6d     dtrack_covariance;
 
   dtrack_error = dtrack_refine_.Estimate(true, grey_image, Tkc,
-                                  dtrack_covariance, dtrack_num_obs,
-                                  grey_image);
+                                  dtrack_covariance, dtrack_num_obs);
 
   LOG_IF(WARNING, dtrack_num_obs < (grey_image.cols*grey_image.rows*0.3))
       << "Number of observations for DTrack is less than 30%!";
@@ -725,6 +722,7 @@ void Tracker::ImportMap(const std::string& map_path)
 void Tracker::RunBatchBAwithLC()
 {
   // Init pose only BA.
+  pose_relaxer_.debug_level_threshold = -1;
   pose_relaxer_.Init(options_, dtrack_vector_.size(), dtrack_vector_.size()*5);
 
   // Reset IMU residuals IDs.
@@ -797,8 +795,7 @@ void Tracker::RunBatchBAwithLC()
       unsigned int        dtrack_num_obs;
       Eigen::Matrix6d     dtrack_covariance;
       dtrack_error = dtrack_.Estimate(true, dtrack_match.grey_img, Trl,
-                                      dtrack_covariance, dtrack_num_obs,
-                                      dtrack_match.depth_img);
+                                      dtrack_covariance, dtrack_num_obs);
 
       // Transfer relative pose to IMU frame.
       Trl = Tic_ * Trl * Tic_.inverse();
@@ -870,8 +867,7 @@ bool Tracker::WhereAmI(
     unsigned int        dtrack_num_obs;
     Eigen::Matrix6d     dtrack_covariance;
     dtrack_error = dtrack_refine_.Estimate(true, image, Tkc,
-                                    dtrack_covariance, dtrack_num_obs,
-                                    image);
+                                    dtrack_covariance, dtrack_num_obs);
 
     // If tracking error is less than threshold, accept as loop closure.
     if (dtrack_error > 15.0) {
