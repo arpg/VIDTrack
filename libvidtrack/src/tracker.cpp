@@ -282,8 +282,8 @@ void Tracker::ConfigureBA(const calibu::CameraRig& rig,
     // Set gravity.
     Eigen::Matrix<double, 3, 1> gravity;
 //    gravity << 0, -9.806, 0; // CityBlock
-    gravity << 0, 0, 9.806; // PathGen
-//    gravity << 0, 0, -9.806; // Rig
+//    gravity << 0, 0, 9.806; // PathGen
+    gravity << 0, 0, -9.806; // Rig
     bundle_adjuster_.SetGravity(gravity);
 
     // Set up BA options.
@@ -386,7 +386,8 @@ void Tracker::Estimate(
   // Push pose estimate into DTrack window.
   DTrackPose dtrack_rel_pose;
   dtrack_rel_pose.T_ab        = rel_pose_estimate;
-  dtrack_rel_pose.covariance  = dtrack_covariance * 1e5;
+//  dtrack_rel_pose.covariance  = dtrack_covariance * 1e5;
+  dtrack_rel_pose.covariance  = dtrack_covariance;
   dtrack_rel_pose.time_a      = current_time_;
   dtrack_rel_pose.time_b      = time;
   dtrack_window_.push_back(dtrack_rel_pose);
@@ -409,7 +410,7 @@ void Tracker::Estimate(
 
   ///--------------------
   /// Windowed BA.
-  if (dtrack_window_.size() >= kMinWindowSize && false) {
+  if (dtrack_window_.size() >= kMinWindowSize) {
     // Sanity check.
     CHECK_EQ(ba_window_.size(), dtrack_window_.size()+1)
         << "BA: " << ba_window_.size() << " DTrack: " << dtrack_window_.size();
@@ -768,7 +769,7 @@ void Tracker::RunBatchBAwithLC()
     DTrackPoseOut& dtrack_estimate = dtrack_vector_[ii];
 
     std::vector<std::pair<unsigned int, float> > candidates;
-    FindLoopClosureCandidates(30, ii, dtrack_estimate.thumbnail,
+    FindLoopClosureCandidates(500, ii, dtrack_estimate.thumbnail,
                               10.0, candidates);
 
 #if 0
@@ -804,7 +805,7 @@ void Tracker::RunBatchBAwithLC()
       if (dtrack_error < 15.0) {
         LOG(INFO) << "Loop closure found!";
         pose_relaxer_.AddBinaryConstraint(ii, index, Trl, dtrack_covariance);
-#if 0
+#if 1
         cv::imshow("Keyframe", dtrack_estimate.grey_img);
         cv::imshow("Match", dtrack_match.grey_img);
         cv::waitKey(8000);

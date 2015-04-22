@@ -139,11 +139,23 @@ public:
   // For debugging. Remove later.
   size_t GetNumPoses()
   {
+    return bundle_adjuster_.GetNumPoses();
+  }
+
+  // For debugging. Remove later.
+  size_t GetNumPosesRelaxer()
+  {
     return pose_relaxer_.GetNumPoses();
   }
 
   // For debugging. Remove later.
   const ba::PoseT<double>& GetPose(const uint32_t id)
+  {
+    return bundle_adjuster_.GetPose(id);
+  }
+
+  // For debugging. Remove later.
+  const ba::PoseT<double>& GetPoseRelaxer(const uint32_t id)
   {
     return pose_relaxer_.GetPose(id);
   }

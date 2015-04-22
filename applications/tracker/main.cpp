@@ -144,6 +144,8 @@ cv::Mat GenerateDepthmap(
 /////////////////////////////////////////////////////////////////////////////
 int main(int argc, char** argv)
 {
+  static Eigen::IOFormat kLongCsvFmt(Eigen::FullPrecision, 0, ", ", "\n", "", "");
+
   std::cout << "Starting VIDTrack ..." << std::endl;
   vid::Tracker vid_tracker(15, 4);
 
@@ -303,6 +305,9 @@ int main(int argc, char** argv)
   } else {
     old_rig = calibu::ReadXmlRig(cl_args.follow("cameras.xml", "-cmod"));
   }
+  Eigen::Matrix4d rotate = SceneGraph::GLCart2T(0, 0, 0, 0, 0, M_PI/2.0);
+  Sophus::SE3d rotates(rotate);
+//  old_rig.cameras[0].T_wc *= rotates;
   Eigen::Matrix3f K = old_rig.cameras[0].camera.K().cast<float>();
   std::cout << "-- K is: " << std::endl << K << std::endl;
 
@@ -538,8 +543,11 @@ int main(int argc, char** argv)
       }
 
       // Save first pose.
-      output_file << SceneGraph::GLT2Cart(ba_accum_rel_pose.matrix()).transpose()
-                  << std::endl;
+//      output_file << SceneGraph::GLT2Cart(ba_accum_rel_pose.matrix()).transpose()
+//                  << std::endl;
+      Eigen::Map<Eigen::Matrix<double,7,1>> mat(ba_accum_rel_pose.data());
+      output_file << mat.transpose().format(kLongCsvFmt) << std::endl;
+
 
       // Capture first image.
       for (size_t ii = 0; ii < filter_size; ++ii) {
@@ -660,22 +668,28 @@ int main(int argc, char** argv)
           // Uncomment this for regular robotic IMU frame.
           ba_accum_rel_pose *= rel_pose;
 
+          // Uncomment this for regular robotic IMU frame.
           vo_pose *= vo;
+          // Uncomment this if poses are to be seen in camera frame (robotics).
+//          vo_pose *= Tic.inverse() * vo * Tic;
         }
         timer.Toc("Tracker");
 
 
 
         // Save poses.
-        Eigen::Vector6d tmp = SceneGraph::GLT2Cart(ba_accum_rel_pose.matrix());
-        output_file << tmp.transpose() << std::endl;
-//        std::cout << "Global Pose: " << std::endl << tmp.transpose() << std::endl;
+//        Eigen::Vector6d tmp = SceneGraph::GLT2Cart(ba_accum_rel_pose.matrix());
+//        output_file << tmp.transpose() << std::endl;
+        Eigen::Map<Eigen::Matrix<double,7,1>> mat(ba_accum_rel_pose.data());
+        output_file << mat.transpose().format(kLongCsvFmt) << std::endl;
 
         ///----- Update GUI objects.
         // Update poses.
         Sophus::SE3d gt_pose;
         if (have_gt) {
+          // Use this to bring poses file from camera frame to IMU frame.
           gt_pose = ((poses[0] * Tic.inverse()).inverse() * poses[frame_index] * Tic.inverse());
+          // Use this to use the poses file as is.
 //          gt_pose = poses[0].inverse() * poses[frame_index];
           // Update errors.
           analytics["BA Global Path Error"] =
@@ -712,8 +726,8 @@ int main(int argc, char** argv)
     if (pangolin::Pushed(run_batch_ba)) {
       vid_tracker.RunBatchBAwithLC();
       path_ba_vec.clear();
-      for (size_t ii = 0; ii < vid_tracker.GetNumPoses(); ++ii) {
-        const ba::PoseT<double>& pose = vid_tracker.GetPose(ii);
+      for (size_t ii = 0; ii < vid_tracker.GetNumPosesRelaxer(); ++ii) {
+        const ba::PoseT<double>& pose = vid_tracker.GetPoseRelaxer(ii);
         path_ba_vec.push_back(pose.t_wp);
       }
     }
