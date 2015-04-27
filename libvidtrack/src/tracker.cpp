@@ -16,9 +16,11 @@
  * limitations under the License.
  */
 
+#include <fstream>
+
 #include <vidtrack/tracker.h>
 
-#include <miniglog/logging.h>
+#include <glog/logging.h>
 
 using namespace vid;
 
@@ -159,7 +161,7 @@ void Tracker::FindLoopClosureCandidates(
 
 ///////////////////////////////////////////////////////////////////////////
 Tracker::Tracker(unsigned int window_size, unsigned int pyramid_levels)
-  : kWindowSize(window_size), kMinWindowSize(2), kPyramidLevels(pyramid_levels),
+  : kWindowSize(window_size), kMinWindowSize(10), kPyramidLevels(pyramid_levels),
     config_ba_(false), config_dtrack_(false), ba_has_converged_(false),
     dtrack_(pyramid_levels), dtrack_refine_(pyramid_levels)
 {
@@ -174,10 +176,10 @@ Tracker::~Tracker()
 
 ///////////////////////////////////////////////////////////////////////////
 void Tracker::ConfigureDTrack(
-    const cv::Mat&                            keyframe_grey,
-    const cv::Mat&                            keyframe_depth,
-    double                                    time,
-    const calibu::CameraModelGeneric<double>& cmod
+    const cv::Mat&              keyframe_grey,
+    const cv::Mat&              keyframe_depth,
+    double                      time,
+    const Eigen::Matrix3d&      cmod
     )
 {
   ConfigureDTrack(keyframe_grey, keyframe_depth, time, cmod, cmod, cmod,
@@ -187,13 +189,13 @@ void Tracker::ConfigureDTrack(
 
 ///////////////////////////////////////////////////////////////////////////
 void Tracker::ConfigureDTrack(
-    const cv::Mat&                            keyframe_grey,
-    const cv::Mat&                            keyframe_depth,
-    double                                    time,
-    const calibu::CameraModelGeneric<double>& live_grey_cmod,
-    const calibu::CameraModelGeneric<double>& ref_grey_cmod,
-    const calibu::CameraModelGeneric<double>& ref_depth_cmod,
-    const Sophus::SE3d&                       Tgd
+    const cv::Mat&            keyframe_grey,
+    const cv::Mat&            keyframe_depth,
+    double                    time,
+    const Eigen::Matrix3d&    live_grey_cmod,
+    const Eigen::Matrix3d&    ref_grey_cmod,
+    const Eigen::Matrix3d&    ref_depth_cmod,
+    const Sophus::SE3d&       Tgd
     )
 {
   if (config_dtrack_) {
@@ -206,7 +208,7 @@ void Tracker::ConfigureDTrack(
 
     // Add initial pose to BA.
     ba::PoseT<double> initial_pose;
-    initial_pose.SetZero();
+    initial_pose.v_w.setZero();
     initial_pose.t_wp = Sophus::SE3d();
     initial_pose.time = time + kTimeOffset;
     ba_window_.push_back(initial_pose);
@@ -227,7 +229,7 @@ void Tracker::ConfigureDTrack(
 
 
 ///////////////////////////////////////////////////////////////////////////
-void Tracker::ConfigureBA(const calibu::CameraRig& rig)
+void Tracker::ConfigureBA(const std::shared_ptr<calibu::Rig<double>> rig)
 {
   // Set up default BA options.
   ba::Options<double> options;
@@ -252,7 +254,7 @@ void Tracker::ConfigureBA(const calibu::CameraRig& rig)
 
 
 ///////////////////////////////////////////////////////////////////////////
-void Tracker::ConfigureBA(const calibu::CameraRig& rig,
+void Tracker::ConfigureBA(const std::shared_ptr<calibu::Rig<double>>& rig,
                           const ba::Options<double>& options)
 {
   if (config_ba_) {
@@ -269,21 +271,15 @@ void Tracker::ConfigureBA(const calibu::CameraRig& rig,
     // vision to robotics, and then applies the transform of camera with
     // respect to IMU -- thus bringing poses to IMU reference frame, required
     // by BA. NOTE: When using Vicalib, IMU is "world" origin.
-    Tic_ = rig_.cameras[0].T_wc * Trv;
-    LOG(INFO) << "Twc:" << std::endl << rig_.cameras[0].T_wc.matrix();
+    Tic_ = rig_->cameras_[0]->Pose() * Trv;
+    LOG(INFO) << "Twc:" << std::endl << rig_->cameras_[0]->Pose().matrix();
     LOG(INFO) << "Tic:" << std::endl << Tic_.matrix();
-
-    // Transform officially all cameras in rig. This is done for compatibility,
-    // in case actual reprojection residuals are used.
-    for (calibu::CameraModelAndTransform& model : rig_.cameras) {
-      model.T_wc = model.T_wc * Trv;
-    }
 
     // Set gravity.
     Eigen::Matrix<double, 3, 1> gravity;
 //    gravity << 0, -9.806, 0; // CityBlock
-//    gravity << 0, 0, 9.806; // PathGen
-    gravity << 0, 0, -9.806; // Rig
+    gravity << 0, 0, 9.806; // PathGen
+//    gravity << 0, 0, -9.806; // Rig
     bundle_adjuster_.SetGravity(gravity);
 
     // Set up BA options.
@@ -320,7 +316,7 @@ void Tracker::Estimate(
   /// If BA has converged, integrate IMU measurements (if available) instead
   /// of doing full pyramid.
   bool use_pyramid = true;
-  if (ba_has_converged_) {
+  if (ba_has_converged_ && false) {
     // Get IMU measurements between keyframe and current frame.
     CHECK_LT(current_time_, time);
     std::vector<ImuMeasurement> imu_measurements =
@@ -345,7 +341,7 @@ void Tracker::Estimate(
       // Get new relative transform to seed ESM.
       rel_pose_estimate = last_adjusted_pose.t_wp.inverse() * new_pose.t_wp;
 
-      // Transform rel pose from IMU to camera frame.
+      // Transform rel pose from IMU (+robotics) to camera (+vision) frame.
       rel_pose_estimate = Tic_.inverse() * rel_pose_estimate * Tic_;
 
       // Do not use pyramid since the IMU should already have us at basin.
@@ -378,15 +374,21 @@ void Tracker::Estimate(
 //  dtrack_covariance = rel_pose_estimate.Adj().inverse() * dtrack_covariance
 //      * rel_pose_estimate.Adj();
 
-  // Transfer relative pose to IMU frame.
+  // Transfer relative pose from camera (+vision) to IMU (+robotics) frame.
   rel_pose_estimate = Tic_ * rel_pose_estimate * Tic_.inverse();
 
   vo_pose = rel_pose_estimate;
 
+  // Adjust covariance until we have an actual sensor model.
+//  if (ba_has_converged_) {
+    dtrack_covariance *= grey_image.rows * grey_image.cols;
+//  } else {
+//    dtrack_covariance /= grey_image.rows * grey_image.cols;
+//  }
+
   // Push pose estimate into DTrack window.
   DTrackPose dtrack_rel_pose;
   dtrack_rel_pose.T_ab        = rel_pose_estimate;
-//  dtrack_rel_pose.covariance  = dtrack_covariance * 1e5;
   dtrack_rel_pose.covariance  = dtrack_covariance;
   dtrack_rel_pose.time_a      = current_time_;
   dtrack_rel_pose.time_b      = time;
@@ -410,7 +412,7 @@ void Tracker::Estimate(
 
   ///--------------------
   /// Windowed BA.
-  if (dtrack_window_.size() >= kMinWindowSize) {
+  if (dtrack_window_.size() >= 2) {
     // Sanity check.
     CHECK_EQ(ba_window_.size(), dtrack_window_.size()+1)
         << "BA: " << ba_window_.size() << " DTrack: " << dtrack_window_.size();
@@ -423,10 +425,13 @@ void Tracker::Estimate(
     // Push first pose and keep track of ID.
     int cur_id, prev_id;
     ba::PoseT<double>& front_adjusted_pose = ba_window_.front();
+//    std::cout << "-- First pose velocity: " << front_adjusted_pose.v_w.transpose()
+//              << std::endl;
     prev_id = bundle_adjuster_.AddPose(front_adjusted_pose.t_wp,
                                        front_adjusted_pose.cam_params,
                                        front_adjusted_pose.v_w,
-                                       front_adjusted_pose.b, true,
+                                       front_adjusted_pose.b,
+                                       front_adjusted_pose.is_active,
                                        front_adjusted_pose.time);
 
     // Set this pose as root ID.
@@ -471,7 +476,7 @@ void Tracker::Estimate(
     // NOTE(jfalquez) This is a hack since BA has that weird memory problem
     // and the minimum window has to be set to 2. However, the real minimum
     // window is controlled here.
-    if (ba_window_.size() == 10) {
+    if (ba_window_.size() == kWindowSize) {
       ba_has_converged_ = true;
     }
 
@@ -485,6 +490,9 @@ void Tracker::Estimate(
     if (dtrack_window_.size() == kWindowSize) {
       dtrack_window_.pop_front();
       ba_window_.pop_front();
+      ba::PoseT<double>& front_adjusted_pose = ba_window_.front();
+//      front_adjusted_pose.is_active = false;
+//      std::cout << "-- Popping pose." << std::endl;
     }
   }
 

@@ -33,7 +33,7 @@
 #pragma clang diagnostic pop
 #endif
 
-#include <calibu/cam/CameraRig.h>
+#include <calibu/Calibu.h>
 
 #include <vidtrack/dtrack.h>
 
@@ -66,34 +66,34 @@ public:
   /// Simplified configuration. Assumes live, reference and depth have same
   /// camera models and depth is aligned to greyscale image.
   void ConfigureDTrack(
-      const cv::Mat&                            keyframe_grey,
-      const cv::Mat&                            keyframe_depth,
-      double                                    time,
-      const calibu::CameraModelGeneric<double>& cmod
+      const cv::Mat&                  keyframe_grey,
+      const cv::Mat&                  keyframe_depth,
+      double                          time,
+      const Eigen::Matrix3d&          cmod
     );
 
 
   ///////////////////////////////////////////////////////////////////////////
   void ConfigureDTrack(
-      const cv::Mat&                            keyframe_grey,
-      const cv::Mat&                            keyframe_depth,
-      double                                    time,
-      const calibu::CameraModelGeneric<double>& live_grey_cmod,
-      const calibu::CameraModelGeneric<double>& ref_grey_cmod,
-      const calibu::CameraModelGeneric<double>& ref_depth_cmod,
-      const Sophus::SE3d&                       Tgd
+      const cv::Mat&                  keyframe_grey,
+      const cv::Mat&                  keyframe_depth,
+      double                          time,
+      const Eigen::Matrix3d&          live_grey_cmod,
+      const Eigen::Matrix3d&          ref_grey_cmod,
+      const Eigen::Matrix3d&          ref_depth_cmod,
+      const Sophus::SE3d&             Tgd
     );
 
 
   ///////////////////////////////////////////////////////////////////////////
   /// Simplified configuration. Default BA options.
-  void ConfigureBA(const calibu::CameraRig& rig);
+  void ConfigureBA(const std::shared_ptr<calibu::Rig<double>> rig);
 
 
   ///////////////////////////////////////////////////////////////////////////
   void ConfigureBA(
-      const calibu::CameraRig&    rig,
-      const ba::Options<double>&  options
+      const std::shared_ptr<calibu::Rig<double>>&   rig,
+      const ba::Options<double>&                    options
     );
 
 
@@ -258,7 +258,7 @@ private:
   bool                                              config_dtrack_;
   bool                                              ba_has_converged_;
 
-  calibu::CameraRig                                 rig_;
+  std::shared_ptr<calibu::Rig<double>>              rig_;
   Sophus::SE3d                                      Tic_;
   Sophus::SE3d                                      current_pose_;
   double                                            current_time_;

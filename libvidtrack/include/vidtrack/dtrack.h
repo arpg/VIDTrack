@@ -41,8 +41,8 @@
 #pragma clang diagnostic pop
 #endif
 
+#include <calibu/Calibu.h>
 #include <sophus/se3.hpp>
-#include <calibu/cam/CameraRig.h>
 
 
 /////////////////////////////////////////////////////////////////////////////
@@ -67,11 +67,11 @@ public:
 
   ///////////////////////////////////////////////////////////////////////////
   void SetParams(
-      const calibu::CameraModelGeneric<double>&   live_grey_cmod,
-      const calibu::CameraModelGeneric<double>&   ref_grey_cmod,
-      const calibu::CameraModelGeneric<double>&   ref_depth_cmod,
-      const Sophus::SE3d&                         Tgd
-      );
+      const Eigen::Matrix3d&    live_grey_K,  // Input: K matrix for live grey camera.
+      const Eigen::Matrix3d&    ref_grey_K,   // Input: K matrix for reference grey camera.
+      const Eigen::Matrix3d&    ref_depth_K,  // Input: K matrix for reference depth camera.
+      const Sophus::SE3d&       Tgd           // Input: Grey-Depth camera transform.
+    );
 
   ///////////////////////////////////////////////////////////////////////////
   void SetKeyframe(
@@ -90,9 +90,9 @@ public:
 
 private:
   ///////////////////////////////////////////////////////////////////////////
-  calibu::CameraModelGeneric<double> _ScaleCM(
-      calibu::CameraModelGeneric<double>  cam_model,  // Input: Camera Model.
-      unsigned int                        level       // Input: Number of pyramid levels.
+  Eigen::Matrix3d  _ScaleCM(
+      const Eigen::Matrix3d&    K,      // Input: Camera model matrix K.
+      unsigned int              level   // Input: Pyramid level to scale K by.
     );
 
   ///////////////////////////////////////////////////////////////////////////
@@ -127,17 +127,17 @@ public:
 
 private:
 #ifdef VIDTRACK_USE_CUDA
-  cuDTrack*                                        cu_dtrack_;
+  cuDTrack*                       cu_dtrack_;
 #endif
 #ifdef VIDTRACK_USE_TBB
-  tbb::task_scheduler_init                         tbb_scheduler_;
+  tbb::task_scheduler_init        tbb_scheduler_;
 #endif
-  std::vector<cv::Mat>                             live_grey_pyramid_;
-  std::vector<cv::Mat>                             live_depth_pyramid_;
-  std::vector<cv::Mat>                             ref_grey_pyramid_;
-  std::vector<cv::Mat>                             ref_depth_pyramid_;
-  std::vector<calibu::CameraModelGeneric<double> > live_grey_cam_model_;
-  std::vector<calibu::CameraModelGeneric<double> > ref_grey_cam_model_;
-  std::vector<calibu::CameraModelGeneric<double> > ref_depth_cam_model_;
-  Sophus::SE3d                                     Tgd_;
+  std::vector<cv::Mat>            live_grey_pyramid_;
+  std::vector<cv::Mat>            live_depth_pyramid_;
+  std::vector<cv::Mat>            ref_grey_pyramid_;
+  std::vector<cv::Mat>            ref_depth_pyramid_;
+  std::vector<Eigen::Matrix3d>    live_grey_cam_model_;
+  std::vector<Eigen::Matrix3d>    ref_grey_cam_model_;
+  std::vector<Eigen::Matrix3d>    ref_depth_cam_model_;
+  Sophus::SE3d                    Tgd_;
 };

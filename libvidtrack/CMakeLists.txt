@@ -9,7 +9,7 @@ set(VIDTRACK_VERSION ${VIDTRACK_VERSION_MAJOR}.${VIDTRACK_VERSION_MINOR})
 
 option(BUILD_SHARED_LIBS "Build Shared Library" ON)
 
-find_package(MINIGLOG REQUIRED)
+find_package(GLog REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(Sophus REQUIRED)
 find_package(OpenCV2 REQUIRED)
@@ -45,7 +45,7 @@ endif()
 list(APPEND VIDTRACK_INC_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/include/
     ${CMAKE_CURRENT_BINARY_DIR}/include/
-    ${MINIGLOG_INCLUDE_DIRS}
+    ${GLOG_INCLUDE_DIRS}
     ${EIGEN3_INCLUDE_DIR}
     ${Sophus_INCLUDE_DIR}
     ${OpenCV2_INCLUDE_DIR}
@@ -72,7 +72,7 @@ list(APPEND VIDTRACK_LINK_DIRS
 #################################################
 # Append all libraries.
 list(APPEND VIDTRACK_LIBS
-    ${MINIGLOG_LIBRARIES}
+    ${GLOG_LIBRARIES}
     ${OpenCV2_LIBRARIES}
     ${Calibu_LIBRARIES}
     ${BA_LIBRARIES}

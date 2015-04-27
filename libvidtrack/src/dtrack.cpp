@@ -18,7 +18,7 @@
 
 #include <vidtrack/dtrack.h>
 
-#include <miniglog/logging.h>
+#include <glog/logging.h>
 
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
@@ -365,10 +365,10 @@ DTrack::~DTrack()
 
 ///////////////////////////////////////////////////////////////////////////
 void DTrack::SetParams(
-    const calibu::CameraModelGeneric<double>& live_grey_cmod,
-    const calibu::CameraModelGeneric<double>& ref_grey_cmod,
-    const calibu::CameraModelGeneric<double>& ref_depth_cmod,
-    const Sophus::SE3d&                       Tgd
+    const Eigen::Matrix3d&    live_grey_cmod,
+    const Eigen::Matrix3d&    ref_grey_cmod,
+    const Eigen::Matrix3d&    ref_depth_cmod,
+    const Sophus::SE3d&       Tgd
     )
 {
   // Store scaled camera models (to avoid recomputing).
@@ -467,12 +467,9 @@ double DTrack::Estimate(
     const cv::Mat& ref_grey_img  = ref_grey_pyramid_[pyramid_lvl];
     const cv::Mat& ref_depth_img = ref_depth_pyramid_[pyramid_lvl];
 
-    const calibu::CameraModelGeneric<double>& live_grey_cmod =
-        ref_grey_cam_model_[pyramid_lvl];
-    const calibu::CameraModelGeneric<double>& ref_grey_cmod =
-        ref_grey_cam_model_[pyramid_lvl];
-    const calibu::CameraModelGeneric<double>& ref_depth_cmod =
-        ref_depth_cam_model_[pyramid_lvl];
+    const Eigen::Matrix3d& Klg = ref_grey_cam_model_[pyramid_lvl];
+    const Eigen::Matrix3d& Krg = ref_grey_cam_model_[pyramid_lvl];
+    const Eigen::Matrix3d& Krd = ref_depth_cam_model_[pyramid_lvl];
 
 #if !defined(VIDTRACK_USE_TBB) && !defined(VIDTRACK_USE_CUDA)
     // NOTE(jfalquez) Use this for speed-up. Add reference image derivative for
@@ -508,11 +505,6 @@ double DTrack::Estimate(
 
       // Inverse transform.
       const Sophus::SE3d      Tlr    = Trl.inverse();
-
-      const Eigen::Matrix3d   Klg    = live_grey_cmod.K();
-      const Eigen::Matrix3d   Krg    = ref_grey_cmod.K();
-      const Eigen::Matrix3d   Krd    = ref_depth_cmod.K();
-
       const Eigen::Matrix3x4d KlgTlr = Klg*Tlr.matrix3x4();
 
 #if defined(VIDTRACK_USE_CUDA)
@@ -740,14 +732,21 @@ double DTrack::Estimate(
 
 
 ///////////////////////////////////////////////////////////////////////////
-calibu::CameraModelGeneric<double> DTrack::_ScaleCM(
-    calibu::CameraModelGeneric<double> cam_model,
-    unsigned int                       level
+Eigen::Matrix3d  DTrack::_ScaleCM(
+    const Eigen::Matrix3d&    K,
+    unsigned int              level
   )
 {
-  const float scale = 1.0f/(1 << level);
+  const double scale = 1.0f/(1 << level);
 
-  return cam_model.Scaled(scale);
+  Eigen::Matrix3d scaled_K = K;
+
+  scaled_K(0,0) *= scale;
+  scaled_K(1,1) *= scale;
+  scaled_K(0,2) = scale*(scaled_K(0,2)+0.5) - 0.5;
+  scaled_K(1,2) = scale*(scaled_K(1,2)+0.5) - 0.5;
+
+  return scaled_K;
 }
 
 

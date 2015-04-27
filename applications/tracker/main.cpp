@@ -37,7 +37,6 @@
 #pragma clang diagnostic ignored "-Wunused-parameter"
 #endif
 #include <calibu/Calibu.h>
-#include <HAL/Utils/GetPot>
 #include <HAL/Camera/CameraDevice.h>
 #include <HAL/IMU/IMUDevice.h>
 #ifdef __clang__
@@ -64,7 +63,7 @@ std::deque<std::tuple<Eigen::Vector3d, Eigen::Vector3d, double> >   filter;
 
 /////////////////////////////////////////////////////////////////////////////
 /// IMU callback.
-void IMU_Handler(pb::ImuMsg& IMUdata, vid::Tracker* vid_tracker) {
+void IMU_Handler(hal::ImuMsg& IMUdata, vid::Tracker* vid_tracker) {
   Eigen::Vector3d a(IMUdata.accel().data(0),
                     IMUdata.accel().data(1),
                     IMUdata.accel().data(2));
@@ -139,6 +138,19 @@ cv::Mat GenerateDepthmap(
 }
 #endif
 
+
+/////////////////////////////////////////////////////////////////////////////
+/// G-FLAGS
+DEFINE_string(cam, "", "Camera arguments for HAL driver.");
+DEFINE_string(cmod, "cameras.xml", "Camera mode file to load.");
+DEFINE_string(imu, "", "IMU arguments for HAL driver.");
+DEFINE_string(map, "", "Path containing pre-saved map.");
+DEFINE_string(poses, "", "Text file containing ground truth poses.");
+DEFINE_string(poses2, "", "Text file containing ground truth poses.");
+DEFINE_string(poses_convention, "robotics", "Convention of poses file being loaded: vision, tsukuba, robotics");
+DEFINE_int32(frame_skip, 0, "Number of frames to skip between iterations.");
+
+
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
@@ -146,28 +158,27 @@ int main(int argc, char** argv)
 {
   static Eigen::IOFormat kLongCsvFmt(Eigen::FullPrecision, 0, ", ", "\n", "", "");
 
+  google::ParseCommandLineFlags(&argc, &argv, true);
+  google::InitGoogleLogging(argv[0]);
+
   std::cout << "Starting VIDTrack ..." << std::endl;
   vid::Tracker vid_tracker(15, 4);
 
-  GetPot cl_args(argc, argv);
-  int frame_skip  = cl_args.follow(0, "-skip");
-
   bool use_map = false;
-  std::string map_path = cl_args.follow("", "-map");
-  if (!map_path.empty()) {
+  if (!FLAGS_map.empty()) {
     // Import map.
-    vid_tracker.ImportMap(map_path);
+    vid_tracker.ImportMap(FLAGS_map);
 
     // Set flag.
     use_map = true;
   }
 
   ///----- Initialize Camera.
-  if (!cl_args.search("-cam")) {
+  if (FLAGS_cam.empty()) {
     std::cerr << "Camera arguments missing!" << std::endl;
     exit(EXIT_FAILURE);
   }
-  hal::Camera camera(cl_args.follow("", "-cam"));
+  hal::Camera camera(FLAGS_cam);
 
   const int image_width = camera.Width();
   const int image_height = camera.Height();
@@ -182,15 +193,15 @@ int main(int argc, char** argv)
 
 
   ///----- Initialize IMU.
-  if (!cl_args.search("-imu")) {
+  if (FLAGS_imu.empty()) {
     std::cerr << "IMU arguments missing!" << std::endl;
     exit(EXIT_FAILURE);
   }
   hal::IMU imu;
   if (use_map == false) {
-    imu = hal::IMU(cl_args.follow("", "-imu"));
+    imu = hal::IMU(FLAGS_imu);
     using std::placeholders::_1;
-    std::function<void (pb::ImuMsg&)> callback
+    std::function<void (hal::ImuMsg&)> callback
                       = std::bind(IMU_Handler, _1, &vid_tracker);
     imu.RegisterIMUDataCallback(callback);
     std::cout << "- Registering IMU device." << std::endl;
@@ -295,25 +306,25 @@ int main(int argc, char** argv)
 
 
   ///----- Load camera models.
-  calibu::CameraRig old_rig;
+  std::shared_ptr<calibu::Rig<double>> rig;
   if (camera.GetDeviceProperty(hal::DeviceDirectory).empty() == false) {
     std::cout<<"- Loaded camera: " <<
                camera.GetDeviceProperty(hal::DeviceDirectory) + '/'
-               + cl_args.follow("cameras.xml", "-cmod") << std::endl;
-    old_rig = calibu::ReadXmlRig(camera.GetDeviceProperty(hal::DeviceDirectory)
-                             + '/' + cl_args.follow("cameras.xml", "-cmod"));
+               + FLAGS_cmod << std::endl;
+    rig = calibu::ReadXmlRig(camera.GetDeviceProperty(hal::DeviceDirectory)
+                             + '/' + FLAGS_cmod);
   } else {
-    old_rig = calibu::ReadXmlRig(cl_args.follow("cameras.xml", "-cmod"));
+    rig = calibu::ReadXmlRig(FLAGS_cmod);
   }
-  Eigen::Matrix4d rotate = SceneGraph::GLCart2T(0, 0, 0, 0, 0, M_PI/2.0);
+  // Standardize camera rig and IMU-Camera transform.
+  rig = calibu::ToCoordinateConvention(rig, calibu::RdfRobotics);
+  Eigen::Matrix4d rotate = SceneGraph::GLCart2T(0, 0, 0, 0, 0, M_PI);
   Sophus::SE3d rotates(rotate);
+  std::cout << "Twc: " << std::endl << SceneGraph::GLT2Cart(rig->cameras_[0]->Pose().matrix()).transpose() << std::endl;
 //  old_rig.cameras[0].T_wc *= rotates;
-  Eigen::Matrix3f K = old_rig.cameras[0].camera.K().cast<float>();
+  std::cout << "Twc: " << std::endl << SceneGraph::GLT2Cart(rig->cameras_[0]->Pose().matrix()).transpose() << std::endl;
+  Eigen::Matrix3f K = rig->cameras_[0]->K().cast<float>();
   std::cout << "-- K is: " << std::endl << K << std::endl;
-
-  // Convert old rig to new rig.
-  calibu::Rig<double> rig;
-  calibu::CreateFromOldRig(&old_rig, &rig);
 
   ///----- Aux variables.
   Sophus::SE3d  current_pose;
@@ -325,25 +336,25 @@ int main(int argc, char** argv)
   bool have_gt;
   std::vector<Sophus::SE3d> poses;
   {
-    std::string pose_file = cl_args.follow("", "-poses");
-    if (pose_file.empty()) {
+    if (FLAGS_poses.empty()) {
       std::cerr << "- NOTE: No poses file given. Not comparing against ground truth!" << std::endl;
       have_gt = false;
       ui_show_gt_path = false;
     } else {
-      pose_file = camera.GetDeviceProperty(hal::DeviceDirectory) + "/" + pose_file;
+      std::string pose_file = camera.GetDeviceProperty(hal::DeviceDirectory)
+          + "/" + FLAGS_poses;
       FILE* fd = fopen(pose_file.c_str(), "r");
       Eigen::Matrix<double, 6, 1> pose;
       float x, y, z, p, q, r;
 
       std::cout << "- Loading pose file: '" << pose_file << "'" << std::endl;
-      if (cl_args.search("-V")) {
+      if (FLAGS_poses_convention == "vision") {
         // Vision convention.
         std::cout << "- NOTE: File is being read in VISION frame." << std::endl;
-      } else if (cl_args.search("-C")) {
+      } else if (FLAGS_poses_convention == "custom") {
         // Custom convention.
         std::cout << "- NOTE: File is being read in *****CUSTOM***** frame." << std::endl;
-      } else if (cl_args.search("-T")) {
+      } else if (FLAGS_poses_convention == "tsukuba") {
         // Tsukuba convention.
         std::cout << "- NOTE: File is being read in TSUKUBA frame." << std::endl;
       } else {
@@ -362,17 +373,17 @@ int main(int argc, char** argv)
         Sophus::SE3d T(SceneGraph::GLCart2T(pose));
 
         // Flag to load poses as a particular convention.
-        if (cl_args.search("-V")) {
+        if (FLAGS_poses_convention == "vision") {
           // Vision convention.
           poses.push_back(T);
-        } else if (cl_args.search("-C")) {
+        } else if (FLAGS_poses_convention == "custom") {
           // Custom setting.
           pose(0) *= -1;
           pose(2) *= -1;
           Sophus::SE3d Tt(SceneGraph::GLCart2T(pose));
           poses.push_back(calibu::ToCoordinateConvention(Tt,
                                                          calibu::RdfRobotics));
-        } else if (cl_args.search("-T")) {
+        } else if (FLAGS_poses_convention == "tsukuba") {
           // Tsukuba convention.
           Eigen::Matrix3d tsukuba_convention;
           tsukuba_convention << -1,  0,  0,
@@ -392,13 +403,13 @@ int main(int argc, char** argv)
       have_gt = true;
     }
     // This is the file provided by Mike.
-    // It supercedes the original "-pose" argument.
+    // It supercedes the original "-poses" argument.
     // Convert camera position, look at, and up into a pose.
-    pose_file = cl_args.follow("", "-poses2");
-    if (pose_file.empty() == false) {
+    if (FLAGS_poses2.empty() == false) {
       poses.clear();
 
-      pose_file = camera.GetDeviceProperty(hal::DeviceDirectory) + "/" + pose_file;
+      std::string pose_file = camera.GetDeviceProperty(hal::DeviceDirectory)
+          + "/" + FLAGS_poses2;
       FILE* fd = fopen(pose_file.c_str(), "r");
       float cx, cy, cz, lx, ly, lz, ux, uy, uz;
 
@@ -495,13 +506,13 @@ int main(int argc, char** argv)
   Sophus::SE3d                      ba_global_pose;
 
   // Image holder.
-  std::shared_ptr<pb::ImageArray> images = pb::ImageArray::Create();
+  std::shared_ptr<hal::ImageArray> images = hal::ImageArray::Create();
 
   // IMU-Camera transform through robotic to vision conversion.
-  Sophus::SE3d Tic = rig.t_wc_[0];
+  Sophus::SE3d Tic = rig->cameras_[0]->Pose();
   Sophus::SE3d Trv;
   Trv.so3() = calibu::RdfRobotics;
-  Sophus::SE3d Ticv = rig.t_wc_[0] * Trv;
+  Sophus::SE3d Ticv = rig->cameras_[0]->Pose() * Trv;
 
   // Open file for saving poses.
   std::ofstream output_file;
@@ -572,8 +583,8 @@ int main(int argc, char** argv)
       cv::Mat maskNAN = cv::Mat(current_depth_map != current_depth_map);
       current_depth_map.setTo(0, maskNAN);
       // Trim left-most margin.
-      for (size_t ii = 0; ii < image_height; ++ii) {
-        for (size_t jj = 0; jj < 20; ++jj) {
+      for (int ii = 0; ii < image_height; ++ii) {
+        for (int jj = 0; jj < 20; ++jj) {
 //          current_depth_map.at<float>(ii, jj) = 0;
         }
       }
@@ -588,9 +599,9 @@ int main(int argc, char** argv)
       current_time = images->at(0)->Timestamp();
 
       // Init VIDTrack.
-      vid_tracker.ConfigureBA(old_rig);
+      vid_tracker.ConfigureBA(rig);
       vid_tracker.ConfigureDTrack(current_grey_image, current_depth_map,
-                                  current_time, old_rig.cameras[0].camera);
+                                  current_time, rig->cameras_[0]->K());
 
       // If map is used, find where we initially are and set current_pose.
       if (use_map) {
@@ -611,7 +622,7 @@ int main(int argc, char** argv)
     ///----- Step forward ...
     if (!paused || pangolin::Pushed(step_once)) {
       //  Capture the new image.
-      for (int ii = 0; ii < frame_skip; ++ii) {
+      for (int ii = 0; ii < FLAGS_frame_skip; ++ii) {
         capture_flag = camera.Capture(*images);
         usleep(100);
       }
@@ -630,8 +641,8 @@ int main(int argc, char** argv)
         cv::Mat maskNAN = cv::Mat(current_depth_map != current_depth_map);
         current_depth_map.setTo(0, maskNAN);
         // Trim left-most margin.
-        for (size_t ii = 0; ii < image_height; ++ii) {
-          for (size_t jj = 0; jj < 20; ++jj) {
+        for (int ii = 0; ii < image_height; ++ii) {
+          for (int jj = 0; jj < 20; ++jj) {
 //            current_depth_map.at<float>(ii, jj) = 0;
           }
         }
@@ -756,7 +767,7 @@ int main(int argc, char** argv)
     gl_path_gt.SetVisible(ui_show_gt_path);
 
 
-#if 0
+#if 1
     // Update path using NIMA's code.
     {
       const std::vector<uint32_t>& imu_residual_ids = vid_tracker.GetImuResidualIds();
