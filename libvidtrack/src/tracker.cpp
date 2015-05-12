@@ -238,16 +238,34 @@ void Tracker::ConfigureBA(const std::shared_ptr<calibu::Rig<double>> rig)
   // If using datasets with no bias, set to true.
   options.regularize_biases_in_batch  = true;
   options.use_triangular_matrices     = true;
+//  options.use_robust_norm_for_inertial_residuals = true;
   // NOTE(jfalquez) When this is set to true, and no IMU residuals are added
   // an error/warning shows up.
   options.use_sparse_solver           = true;
   options.use_dogleg                  = true;
 
   // IMU Sigmas.
+  // Default.
+  /*
   options.accel_sigma       = 0.001883649; //0.0392266
   options.accel_bias_sigma  = 1.2589254e-2;
   options.gyro_sigma        = 5.3088444e-5; //0.00104719755
   options.gyro_bias_sigma   = 1.4125375e-4;
+  */
+
+  // Microstrain.
+  /*
+  options.accel_sigma       = 0.002;
+  options.accel_bias_sigma  = 4.0e-5;
+  options.gyro_sigma        = 0.00436332313;
+  options.gyro_bias_sigma   = 0.00523598775;
+  */
+
+  // Simulated.
+  options.accel_sigma       = 1.0e-5;
+  options.accel_bias_sigma  = 1.0e-8;
+  options.gyro_sigma        = 1.0e-5;
+  options.gyro_bias_sigma   = 1.0e-8;
 
   ConfigureBA(rig, options);
 }
@@ -279,7 +297,7 @@ void Tracker::ConfigureBA(const std::shared_ptr<calibu::Rig<double>>& rig,
     // Set gravity.
     Eigen::Matrix<double, 3, 1> gravity;
 //    gravity << 0, -9.806, 0; // CityBlock
-    gravity << 0, 0, 9.806; // PathGen
+    gravity << 0, 0, 9.806; // Simulated
 //    gravity << 0, 0, -9.806; // Rig
     bundle_adjuster_.SetGravity(gravity);
 
@@ -371,12 +389,20 @@ void Tracker::Estimate(
   LOG_IF(WARNING, dtrack_num_obs < (grey_image.cols*grey_image.rows*0.3))
       << "Number of observations for DTrack is less than 30%!";
 
-  // Adjust covariance until we have an actual sensor model.
-    dtrack_covariance *= grey_image.rows * grey_image.cols;
-
   // Transform covariance from tangent space to euclidean.
-//  dtrack_covariance = rel_pose_estimate.Adj().inverse() * dtrack_covariance
-//      * rel_pose_estimate.Adj();
+  // TODO(jmf) Verify this.
+  Sophus::SO3d rotation = rel_pose_estimate.so3().inverse();
+  Eigen::Matrix6d adjoint;
+  adjoint.setIdentity();
+  adjoint.block<3,3>(0,0) = rotation.Adj();
+//  dtrack_covariance = rel_pose_estimate.Adj() * dtrack_covariance
+//      * rel_pose_estimate.Adj().transpose();
+//  dtrack_covariance = adjoint * dtrack_covariance * adjoint.transpose();
+
+  // Adjust covariance until we have an actual sensor model.
+//    dtrack_covariance *= 1e5;
+
+//  std::cout << "Cov:" << std::endl << dtrack_covariance << std::endl;
 
   // Transform covariance from vision to robotics.
   Eigen::Matrix6d     new_dtrack_covariance;
@@ -434,7 +460,7 @@ void Tracker::Estimate(
 
   ///--------------------
   /// Windowed BA.
-  if (dtrack_window_.size() >= 2) {
+  if (dtrack_window_.size() >= 2 && true) {
     // Sanity check.
     CHECK_EQ(ba_window_.size(), dtrack_window_.size()+1)
         << "BA: " << ba_window_.size() << " DTrack: " << dtrack_window_.size();
@@ -447,8 +473,8 @@ void Tracker::Estimate(
     // Push first pose and keep track of ID.
     int cur_id, prev_id;
     ba::PoseT<double>& front_adjusted_pose = ba_window_.front();
-    std::cout << "-- First pose velocity: " << front_adjusted_pose.v_w.transpose()
-              << std::endl;
+//    std::cout << "-- First pose velocity: " << front_adjusted_pose.v_w.transpose()
+//              << std::endl;
     prev_id = bundle_adjuster_.AddPose(front_adjusted_pose.t_wp,
                                        front_adjusted_pose.cam_params,
                                        front_adjusted_pose.v_w,
@@ -514,7 +540,7 @@ void Tracker::Estimate(
       ba_window_.pop_front();
       ba::PoseT<double>& front_adjusted_pose = ba_window_.front();
 //      front_adjusted_pose.is_active = false;
-      std::cout << "-- Popping pose." << std::endl;
+//      std::cout << "-- Popping pose." << std::endl;
     }
   }
 

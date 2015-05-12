@@ -23,6 +23,8 @@
 
 #include <vidtrack/config.h>
 
+#undef VIDTRACK_USE_TBB
+
 #ifdef VIDTRACK_USE_TBB
 #include <tbb/tbb.h>
 #endif
@@ -83,7 +85,7 @@ public:
   double Estimate(
       bool                      use_pyramid,  // Input: Flag to enable full pyramid.
       const cv::Mat&            live_grey,    // Input: Live image (unsigned char format).
-      Sophus::SE3Group<double>& Trl,          // Input/Output: Transform between grey cameras (vision frame/input is hint).
+      Sophus::SE3d&             Trl,          // Input/Output: Transform between grey cameras (vision frame/input is hint).
       Eigen::Matrix6d&          covariance,   // Output: Covariance.
       unsigned int&             num_obs       // Output: Number of observations.
     );
@@ -123,6 +125,7 @@ private:
 
   ///////////////////////////////////////////////////////////////////////////
 public:
+  const double       kGreySigma = 5.0;
   const unsigned int kPyramidLevels;
 
 private:

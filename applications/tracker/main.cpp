@@ -318,12 +318,8 @@ int main(int argc, char** argv)
   }
   // Standardize camera rig and IMU-Camera transform.
   rig = calibu::ToCoordinateConvention(rig, calibu::RdfRobotics);
-  Eigen::Matrix4d rotate = SceneGraph::GLCart2T(0, 0, 0, 0, 0, M_PI);
-  Sophus::SE3d rotates(rotate);
-  std::cout << "Twc: " << std::endl << SceneGraph::GLT2Cart(rig->cameras_[0]->Pose().matrix()).transpose() << std::endl;
-//  old_rig.cameras[0].T_wc *= rotates;
-  std::cout << "Twc: " << std::endl << SceneGraph::GLT2Cart(rig->cameras_[0]->Pose().matrix()).transpose() << std::endl;
-  Eigen::Matrix3f K = rig->cameras_[0]->K().cast<float>();
+  std::cout << "Twc: " << std::endl << rig->cameras_[0]->Pose().matrix().transpose() << std::endl;
+  const Eigen::Matrix3f K = rig->cameras_[0]->K().cast<float>();
   std::cout << "-- K is: " << std::endl << K << std::endl;
 
   ///----- Aux variables.
@@ -570,8 +566,6 @@ int main(int argc, char** argv)
       // Set images.
       current_grey_image = images->at(0)->Mat().clone();
       current_depth_map = images->at(1)->Mat().clone();
-//      cv::flip(current_grey_image, current_grey_image, 1);
-//      cv::flip(current_depth_map, current_depth_map, 1);
 
 #if 0
       double min, max;
@@ -626,16 +620,21 @@ int main(int argc, char** argv)
         capture_flag = camera.Capture(*images);
         usleep(100);
       }
-      capture_flag = camera.Capture(*images);
+      if (frame_index == 1850) {
+        capture_flag = false;
+      } else {
+        capture_flag = camera.Capture(*images);
+      }
 
       if (capture_flag == false) {
+        std::cout << "Last Pose: " << SceneGraph::GLT2Cart(ba_accum_rel_pose.matrix()).transpose() << std::endl;
+        Sophus::SE3d gt_pose = ((poses[0] * Tic.inverse()).inverse() * poses[frame_index-1] * Tic.inverse());
+        std::cout << "Error: " << Sophus::SE3::log(ba_accum_rel_pose.inverse() * gt_pose).head(3).norm() << std::endl;
         paused = true;
       } else {
         // Set images.
         current_grey_image = images->at(0)->Mat().clone();
         current_depth_map = images->at(1)->Mat().clone();
-//        cv::flip(current_grey_image, current_grey_image, 1);
-//        cv::flip(current_depth_map, current_depth_map, 1);
 
         // Post-process images.
         cv::Mat maskNAN = cv::Mat(current_depth_map != current_depth_map);
