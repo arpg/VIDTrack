@@ -22,6 +22,11 @@
 
 #include <glog/logging.h>
 
+DEFINE_bool(imu_seeding, true,
+            "Seed visual odometry with IMU measurements instead of using pyramid");
+DEFINE_bool(use_imu, true,
+            "Use IMU measurements within a BA window to aid localization");
+
 using namespace vid;
 
 inline Eigen::Vector3d R2Cart(const Eigen::Matrix3d& R) {
@@ -335,7 +340,7 @@ void Tracker::Estimate(
   /// If BA has converged, integrate IMU measurements (if available) instead
   /// of doing full pyramid.
   bool use_pyramid = true;
-  if (ba_has_converged_ && false) {
+  if (ba_has_converged_ && FLAGS_imu_seeding) {
     // Get IMU measurements between keyframe and current frame.
     CHECK_LT(current_time_, time);
     std::vector<ImuMeasurement> imu_measurements =
@@ -395,9 +400,9 @@ void Tracker::Estimate(
   Eigen::Matrix6d adjoint;
   adjoint.setIdentity();
   adjoint.block<3,3>(0,0) = rotation.Adj();
+  dtrack_covariance = adjoint * dtrack_covariance * adjoint.transpose();
 //  dtrack_covariance = rel_pose_estimate.Adj() * dtrack_covariance
 //      * rel_pose_estimate.Adj().transpose();
-//  dtrack_covariance = adjoint * dtrack_covariance * adjoint.transpose();
 
   // Adjust covariance until we have an actual sensor model.
 //    dtrack_covariance *= 1e5;
@@ -460,7 +465,7 @@ void Tracker::Estimate(
 
   ///--------------------
   /// Windowed BA.
-  if (dtrack_window_.size() >= 2 && true) {
+  if (dtrack_window_.size() >= 2 && FLAGS_use_imu) {
     // Sanity check.
     CHECK_EQ(ba_window_.size(), dtrack_window_.size()+1)
         << "BA: " << ba_window_.size() << " DTrack: " << dtrack_window_.size();
