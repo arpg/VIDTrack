@@ -514,6 +514,9 @@ int main(int argc, char** argv)
   std::ofstream output_file;
   output_file.open("poses.txt");
 
+  double total_trajectory = 0;
+  double trajectory_error = 0;
+
   /////////////////////////////////////////////////////////////////////////////
   ///---- MAIN LOOP
   ///
@@ -628,8 +631,8 @@ int main(int argc, char** argv)
 
       if (capture_flag == false) {
         std::cout << "Last Pose: " << SceneGraph::GLT2Cart(ba_accum_rel_pose.matrix()).transpose() << std::endl;
-        Sophus::SE3d gt_pose = ((poses[0] * Tic.inverse()).inverse() * poses[frame_index-1] * Tic.inverse());
-        std::cout << "Error: " << Sophus::SE3::log(ba_accum_rel_pose.inverse() * gt_pose).head(3).norm() << std::endl;
+        std::cout << "Final Mean Error: " << trajectory_error/frame_index << std::endl;
+        std::cout << "Total Trajectory: " << total_trajectory << std::endl;
         paused = true;
       } else {
         // Set images.
@@ -703,11 +706,13 @@ int main(int argc, char** argv)
 //          gt_pose = poses[0].inverse() * poses[frame_index];
           // Update errors.
           analytics["BA Global Path Error"] =
-              Sophus::SE3::log(ba_global_pose.inverse() * gt_pose).head(3).norm();
+              (ba_global_pose.inverse() * gt_pose).translation().norm();
           analytics["BA Rel Path Error"] =
-              Sophus::SE3::log(ba_accum_rel_pose.inverse() * gt_pose).head(3).norm();
+              (ba_accum_rel_pose.inverse() * gt_pose).translation().norm();
           analytics["VO Path Error"] =
-              Sophus::SE3::log(vo_pose.inverse() * gt_pose).head(3).norm();
+              (vo_pose.inverse() * gt_pose).translation().norm();
+          trajectory_error += (ba_accum_rel_pose.inverse() * gt_pose).translation().norm();
+          total_trajectory += ((poses[frame_index-1] * Tic.inverse()).inverse() * poses[frame_index] * Tic.inverse()).translation().norm();
         }
 
         // Update path.
