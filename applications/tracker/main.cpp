@@ -149,6 +149,7 @@ DEFINE_string(poses, "", "Text file containing ground truth poses.");
 DEFINE_string(poses2, "", "Text file containing ground truth poses.");
 DEFINE_string(poses_convention, "robotics", "Convention of poses file being loaded: vision, tsukuba, robotics");
 DEFINE_int32(frame_skip, 0, "Number of frames to skip between iterations.");
+DEFINE_int32(downsample, 0, "How many times to downsample image.");
 
 
 /////////////////////////////////////////////////////////////////////////////
@@ -180,8 +181,8 @@ int main(int argc, char** argv)
   }
   hal::Camera camera(FLAGS_cam);
 
-  const int image_width = camera.Width();
-  const int image_height = camera.Height();
+  const int image_width = camera.Width() >> FLAGS_downsample;
+  const int image_height = camera.Height() >> FLAGS_downsample;
   std::cout << "- Image Dimensions: " << image_width <<
                "x" << image_height << std::endl;
 
@@ -318,6 +319,12 @@ int main(int argc, char** argv)
   }
   // Standardize camera rig and IMU-Camera transform.
   rig = calibu::ToCoordinateConvention(rig, calibu::RdfRobotics);
+  // If downsampling, scale camera model appropriately.
+  if (FLAGS_downsample != 0) {
+    const float scale = 1.0 / std::powf(2.0, FLAGS_downsample);
+    rig->cameras_[0]->Scale(scale);
+    rig->cameras_[1]->Scale(scale);
+  }
   std::cout << "Twc: " << std::endl << rig->cameras_[0]->Pose().matrix().transpose() << std::endl;
   const Eigen::Matrix3f K = rig->cameras_[0]->K().cast<float>();
   std::cout << "-- K is: " << std::endl << K << std::endl;
@@ -567,8 +574,17 @@ int main(int argc, char** argv)
       capture_flag = camera.Capture(*images);
 
       // Set images.
-      current_grey_image = images->at(0)->Mat().clone();
-      current_depth_map = images->at(1)->Mat().clone();
+      if (FLAGS_downsample != 0) {
+        std::vector<cv::Mat> grey_pyramid;
+        std::vector<cv::Mat> depth_pyramid;
+        cv::buildPyramid(images->at(0)->Mat(), grey_pyramid, FLAGS_downsample);
+        cv::buildPyramid(images->at(1)->Mat(), depth_pyramid, FLAGS_downsample);
+        current_grey_image = grey_pyramid[FLAGS_downsample];
+        current_depth_map = depth_pyramid[FLAGS_downsample];
+      } else {
+        current_grey_image = images->at(0)->Mat().clone();
+        current_depth_map = images->at(1)->Mat().clone();
+      }
 
 #if 0
       double min, max;
@@ -636,8 +652,17 @@ int main(int argc, char** argv)
         paused = true;
       } else {
         // Set images.
-        current_grey_image = images->at(0)->Mat().clone();
-        current_depth_map = images->at(1)->Mat().clone();
+        if (FLAGS_downsample != 0) {
+          std::vector<cv::Mat> grey_pyramid;
+          std::vector<cv::Mat> depth_pyramid;
+          cv::buildPyramid(images->at(0)->Mat(), grey_pyramid, FLAGS_downsample);
+          cv::buildPyramid(images->at(1)->Mat(), depth_pyramid, FLAGS_downsample);
+          current_grey_image = grey_pyramid[FLAGS_downsample];
+          current_depth_map = depth_pyramid[FLAGS_downsample];
+        } else {
+          current_grey_image = images->at(0)->Mat().clone();
+          current_depth_map = images->at(1)->Mat().clone();
+        }
 
         // Post-process images.
         cv::Mat maskNAN = cv::Mat(current_depth_map != current_depth_map);
