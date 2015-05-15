@@ -20,6 +20,19 @@
 
 #include <glog/logging.h>
 
+
+DEFINE_bool(discard_saturated, true,
+            "Discard under/over saturated pixels during pose estimation.");
+DEFINE_double(min_depth, 0.10,
+              "Minimum depth to consider for pose estimation.");
+DEFINE_double(max_depth, 20.0,
+              "Maxmimum depth to consider for pose estimation.");
+DEFINE_double(norm_param, 10.0,
+              "Tukey norm parameter for robust norm.");
+DEFINE_bool(semi_dense, false,
+            "Use semi-dense approach for VO rather than full dense.");
+
+
 #undef VIDTRACK_USE_TBB
 
 
@@ -570,6 +583,25 @@ void DTrack::SetKeyframe(
   // Build pyramids.
   cv::buildPyramid(ref_grey, ref_grey_pyramid_, kPyramidLevels);
   cv::buildPyramid(ref_depth, ref_depth_pyramid_, kPyramidLevels);
+
+  // If semi-dense is used, run edge detector over pyramid.
+  if (FLAGS_semi_dense) {
+    ref_grey_edges_.clear();
+    for (size_t pyramid_lvl = 0; pyramid_lvl < kPyramidLevels; ++pyramid_lvl) {
+      cv::Mat detected_edges;
+      cv::blur(ref_grey_pyramid_[pyramid_lvl], detected_edges, cv::Size(3,3));
+
+      // Canny detector.
+      const double kernel_size = 3;
+      const double canny_threshold = 30;
+      cv::Canny(detected_edges, detected_edges, canny_threshold,
+                canny_threshold*3, kernel_size);
+
+      // Store edge image. Contains 255 if edge, 0 otherwise.
+      ref_grey_edges_.push_back(detected_edges);
+    }
+  }
+
 }
 
 #define DECIMATE 0
@@ -587,12 +619,11 @@ double DTrack::Estimate(
   num_obs = 0;
   covariance.setZero();
 
-  // TODO(jfalquez) Pass this options in Config method to avoid re-initializing.
   // Options.
-  const double norm_c            = 10.0;
-  const bool   discard_saturated = true;
-  const float  min_depth         = 0.10;
-  const float  max_depth         = 20.0;
+  const double norm_c            = FLAGS_norm_param;
+  const bool   discard_saturated = FLAGS_discard_saturated;
+  const float  min_depth         = FLAGS_min_depth;
+  const float  max_depth         = FLAGS_max_depth;
 
   // Set pyramid max-iterations and full estimate mask.
   std::vector<bool>         vec_full_estimate  = {1, 1, 1, 0};
@@ -656,10 +687,6 @@ double DTrack::Estimate(
           reinterpret_cast<float*>(gradient_x_ref.data),
           reinterpret_cast<float*>(gradient_y_ref.data));
 
-//    cv::imshow("GradX", gradient_x_live);
-//    cv::imshow("GradY", gradient_y_live);
-//    cv::waitKey(1000);
-
     // Reset error.
     last_error = FLT_MAX;
 
@@ -681,11 +708,6 @@ double DTrack::Estimate(
       // Inverse transform.
       const Sophus::SE3d      Tlr    = Trl.inverse();
       const Eigen::Matrix3x4d KlgTlr = Klg*Tlr.matrix3x4();
-
-//      std::cout << "Inside Estimate (inv): " << std::endl << Tlr.matrix() << std::endl;
-
-//      std::cout << "[@L:" << pyramid_lvl << " I:"
-//                << num_iters << "]" << std::endl;
 
 #if defined(VIDTRACK_USE_CUDA)
       cu_dtrack_->Estimate(live_grey_img, ref_grey_img, ref_depth_img, Klg,
@@ -750,6 +772,18 @@ double DTrack::Estimate(
           if (pr_g(0) < 2 || pr_g(0) >= ref_grey_img.cols-3
              || pr_g(1) < 2 || pr_g(1) >= ref_grey_img.rows-3) {
             continue;
+          }
+
+          // For semi-dense: Check if point is not an edge.
+          if (FLAGS_semi_dense) {
+            const double edge =
+                interp<unsigned char>(pr_g(0), pr_g(1),
+                                      ref_grey_edges_[pyramid_lvl].data,
+                                      ref_grey_edges_[pyramid_lvl].cols,
+                                      ref_grey_edges_[pyramid_lvl].rows);
+            if (edge == 0) {
+              continue;
+            }
           }
 
           // Homogenized 3d point in live grey camera.
