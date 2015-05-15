@@ -647,8 +647,10 @@ int main(int argc, char** argv)
 
       if (capture_flag == false) {
         std::cout << "Last Pose: " << SceneGraph::GLT2Cart(ba_accum_rel_pose.matrix()).transpose() << std::endl;
+        std::cout << "Trajectory Error: " << trajectory_error << std::endl;
         std::cout << "Final Mean Error: " << trajectory_error/frame_index << std::endl;
         std::cout << "Total Trajectory: " << total_trajectory << std::endl;
+        std::cout << "Final Error by trajectory: " << trajectory_error/total_trajectory << std::endl;
         paused = true;
       } else {
         // Set images.
@@ -736,6 +738,9 @@ int main(int argc, char** argv)
               (ba_accum_rel_pose.inverse() * gt_pose).translation().norm();
           analytics["VO Path Error"] =
               (vo_pose.inverse() * gt_pose).translation().norm();
+          std::cout << "Estimated Pose: " << SceneGraph::GLT2Cart(ba_accum_rel_pose.matrix()).transpose() << std::endl;
+          std::cout << "GT Pose: " << SceneGraph::GLT2Cart(gt_pose.matrix()).transpose() << std::endl;
+          std::cout << "Pose Error: " << (ba_accum_rel_pose.inverse() * gt_pose).translation().norm() << std::endl;
           trajectory_error += (ba_accum_rel_pose.inverse() * gt_pose).translation().norm();
           total_trajectory += ((poses[frame_index-1] * Tic.inverse()).inverse() * poses[frame_index] * Tic.inverse()).translation().norm();
         }

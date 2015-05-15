@@ -137,6 +137,7 @@ private:
 #endif
   std::vector<cv::Mat>            live_grey_pyramid_;
   std::vector<cv::Mat>            live_depth_pyramid_;
+  std::vector<cv::Mat>            ref_grey_edges_;
   std::vector<cv::Mat>            ref_grey_pyramid_;
   std::vector<cv::Mat>            ref_depth_pyramid_;
   std::vector<Eigen::Matrix3d>    live_grey_cam_model_;
