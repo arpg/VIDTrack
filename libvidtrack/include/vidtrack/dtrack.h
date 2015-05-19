@@ -125,7 +125,8 @@ private:
 
   ///////////////////////////////////////////////////////////////////////////
 public:
-  const double       kGreySigma = 5.0;
+  const double       kGreySigma = 1.0;
+  const double       kDepthSigma = 0.01;
   const unsigned int kPyramidLevels;
 
 private:

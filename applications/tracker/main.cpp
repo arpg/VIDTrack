@@ -141,6 +141,16 @@ cv::Mat GenerateDepthmap(
 
 /////////////////////////////////////////////////////////////////////////////
 /// G-FLAGS
+const char* USAGE =
+"This application runs a dense or semi-dense visual inertial tracker. The\n"
+"poses are given out in robotics frame and with respect to the 'center' of\n"
+"the robot 'rig' (i.e. the origin in the camera model file).\n\n"
+"Examples: \n\n"
+" tracker -cam file:[grey=1]//~/Office/[images/le*.png,depth/le*.pdm]\n"
+"         -imu csv://~/Office/imu/ -cmod cameras.xml\n"
+" tracker -cam log://~/Office/proto.log -imu log://~/Office/proto.log\n"
+"         -cmod cameras.xml -noimu_seeding\n";
+
 DEFINE_string(cam, "", "Camera arguments for HAL driver.");
 DEFINE_string(cmod, "cameras.xml", "Camera mode file to load.");
 DEFINE_string(imu, "", "IMU arguments for HAL driver.");
@@ -150,6 +160,9 @@ DEFINE_string(poses2, "", "Text file containing ground truth poses.");
 DEFINE_string(poses_convention, "robotics", "Convention of poses file being loaded: vision, tsukuba, robotics");
 DEFINE_int32(frame_skip, 0, "Number of frames to skip between iterations.");
 DEFINE_int32(downsample, 0, "How many times to downsample image.");
+DEFINE_double(depth_sigma, 0.0, "Gaussian noise added to perturb depth map.");
+DEFINE_double(imu_accel_sigma, 0.0, "Gaussian noise added to perturb accel data.");
+DEFINE_double(imu_gyro_sigma, 0.0, "Gaussian noise added to perturb gyro data.");
 
 
 /////////////////////////////////////////////////////////////////////////////
@@ -159,6 +172,11 @@ int main(int argc, char** argv)
 {
   static Eigen::IOFormat kLongCsvFmt(Eigen::FullPrecision, 0, ", ", "\n", "", "");
 
+  if (argc == 1) {
+    google::SetUsageMessage(USAGE);
+    google::ShowUsageWithFlags(argv[0]);
+    return EXIT_FAILURE;
+  }
   google::ParseCommandLineFlags(&argc, &argv, true);
   google::InitGoogleLogging(argv[0]);
 
@@ -586,6 +604,13 @@ int main(int argc, char** argv)
         current_depth_map = images->at(1)->Mat().clone();
       }
 
+      // Add noise to depth map.
+      if (FLAGS_depth_sigma != 0.0) {
+        cv::Mat depth_noise(current_depth_map.rows, current_depth_map.cols, CV_32FC1);
+        cv::randn(depth_noise, 0.0, FLAGS_depth_sigma);
+        current_depth_map += depth_noise;
+      }
+
 #if 0
       double min, max;
       cv::minMaxLoc(current_depth_map, &min, &max, nullptr, nullptr);
@@ -647,10 +672,11 @@ int main(int argc, char** argv)
 
       if (capture_flag == false) {
         std::cout << "Last Pose: " << SceneGraph::GLT2Cart(ba_accum_rel_pose.matrix()).transpose() << std::endl;
-        std::cout << "Trajectory Error: " << trajectory_error << std::endl;
-        std::cout << "Final Mean Error: " << trajectory_error/frame_index << std::endl;
         std::cout << "Total Trajectory: " << total_trajectory << std::endl;
-        std::cout << "Final Error by trajectory: " << trajectory_error/total_trajectory << std::endl;
+        std::cout << "Total Trajectory Error: " << trajectory_error << std::endl;
+        std::cout << "Mean Trajectory Error: " << trajectory_error/frame_index << std::endl;
+        std::cout << "Total Error by trajectory: " << trajectory_error/total_trajectory << std::endl;
+        std::cout << "Mean Error by trajectory: " << (trajectory_error/frame_index)/total_trajectory << std::endl;
         paused = true;
       } else {
         // Set images.
@@ -664,6 +690,13 @@ int main(int argc, char** argv)
         } else {
           current_grey_image = images->at(0)->Mat().clone();
           current_depth_map = images->at(1)->Mat().clone();
+        }
+
+        // Add noise to depth map.
+        if (FLAGS_depth_sigma != 0.0) {
+          cv::Mat depth_noise(current_depth_map.rows, current_depth_map.cols, CV_32FC1);
+          cv::randn(depth_noise, 0.0, FLAGS_depth_sigma);
+          current_depth_map += depth_noise;
         }
 
         // Post-process images.
@@ -738,9 +771,9 @@ int main(int argc, char** argv)
               (ba_accum_rel_pose.inverse() * gt_pose).translation().norm();
           analytics["VO Path Error"] =
               (vo_pose.inverse() * gt_pose).translation().norm();
-          std::cout << "Estimated Pose: " << SceneGraph::GLT2Cart(ba_accum_rel_pose.matrix()).transpose() << std::endl;
-          std::cout << "GT Pose: " << SceneGraph::GLT2Cart(gt_pose.matrix()).transpose() << std::endl;
-          std::cout << "Pose Error: " << (ba_accum_rel_pose.inverse() * gt_pose).translation().norm() << std::endl;
+//          std::cout << "Estimated Pose: " << SceneGraph::GLT2Cart(ba_accum_rel_pose.matrix()).transpose() << std::endl;
+//          std::cout << "GT Pose: " << SceneGraph::GLT2Cart(gt_pose.matrix()).transpose() << std::endl;
+//          std::cout << "Pose Error: " << (ba_accum_rel_pose.inverse() * gt_pose).translation().norm() << std::endl;
           trajectory_error += (ba_accum_rel_pose.inverse() * gt_pose).translation().norm();
           total_trajectory += ((poses[frame_index-1] * Tic.inverse()).inverse() * poses[frame_index] * Tic.inverse()).translation().norm();
         }

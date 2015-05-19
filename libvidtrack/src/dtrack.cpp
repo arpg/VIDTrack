@@ -971,7 +971,8 @@ double DTrack::Estimate(
           const double w = _NormTukey(y, norm_c_pyr);
 
           // Uncertainties.
-          const double depth_sigma = depth/20.0;
+//          const double depth_sigma = depth/20.0;
+          const double depth_sigma = 0.01;
 
           // Error prop: NewSigma = J * Sigma * J_transpose
           const double depth_unc = Jd * (depth_sigma*depth_sigma) * Jd;
