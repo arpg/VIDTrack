@@ -18,6 +18,8 @@
 
 #include <unistd.h>
 #include <deque>
+#include <tuple>
+#include <random>
 #include <fstream>
 
 #include <Eigen/Eigen>
@@ -57,52 +59,73 @@
 
 
 /////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////
+/// G-FLAGS
+const char* USAGE =
+"This application runs a dense or semi-dense visual inertial tracker. The\n"
+"poses are given out in robotics frame and with respect to the 'center' of\n"
+"the robot 'rig' (i.e. the origin in the camera model file).\n\n"
+"Examples: \n\n"
+" tracker -cam file:[grey=1]//~/Office/[images/le*.png,depth/le*.pdm]\n"
+"         -imu csv://~/Office/imu/ -cmod cameras.xml\n"
+" tracker -cam log://~/Office/proto.log -imu log://~/Office/proto.log\n"
+"         -cmod cameras.xml -noimu_seeding\n";
+
+DEFINE_string(cam, "", "Camera arguments for HAL driver.");
+DEFINE_string(cmod, "cameras.xml", "Camera mode file to load.");
+DEFINE_string(imu, "", "IMU arguments for HAL driver.");
+DEFINE_string(map, "", "Path containing pre-saved map.");
+DEFINE_string(poses, "", "Text file containing ground truth poses.");
+DEFINE_string(poses2, "", "Text file containing ground truth poses.");
+DEFINE_string(poses_convention, "robotics", "Convention of poses file being loaded: vision, tsukuba, robotics");
+DEFINE_int32(frame_skip, 0, "Number of frames to skip between iterations.");
+DEFINE_int32(downsample, 0, "How many times to downsample image.");
+DEFINE_double(depth_sigma, 0.0, "Gaussian noise added to perturb depth map.");
+DEFINE_double(imu_accel_sigma, 0.0, "Gaussian noise added to perturb accel data.");
+DEFINE_double(imu_gyro_sigma, 0.0, "Gaussian noise added to perturb gyro data.");
+/////////////////////////////////////////////////////////////////////////////
+///
+
+
+
+/////////////////////////////////////////////////////////////////////////////
 /// IMU auxilary variables.
-const size_t    filter_size = 0;
-std::deque<std::tuple<Eigen::Vector3d, Eigen::Vector3d, double> >   filter;
+std::random_device                rand_device;
+std::mt19937                      pseudo_rand_num_gen(rand_device());
+std::normal_distribution<double>  accel_noise(0.0, FLAGS_imu_accel_sigma);
+std::normal_distribution<double>  gyro_noise(0.0, FLAGS_imu_gyro_sigma);
 
 /////////////////////////////////////////////////////////////////////////////
 /// IMU callback.
 void IMU_Handler(hal::ImuMsg& IMUdata, vid::Tracker* vid_tracker) {
-  Eigen::Vector3d a(IMUdata.accel().data(0),
-                    IMUdata.accel().data(1),
-                    IMUdata.accel().data(2));
-  Eigen::Vector3d w(IMUdata.gyro().data(0),
-                    IMUdata.gyro().data(1),
-                    IMUdata.gyro().data(2));
-
-
-  // If filter is used...
-  if (filter_size > 0) {
-    filter.push_back(std::make_tuple(a, w, IMUdata.system_time()));
-
-    // If filter is full, start using it.
-    if (filter.size() == filter_size) {
-      // Average variables.
-      double          at = 0;
-      Eigen::Vector3d aa, aw;
-      aa.setZero(); aw.setZero();
-
-      // Average.
-      for (size_t ii = 0; ii < filter_size; ++ii) {
-        aa += std::get<0>(filter[ii]);
-        aw += std::get<1>(filter[ii]);
-        at += std::get<2>(filter[ii]);
-      }
-      aa /= filter_size;
-      aw /= filter_size;
-      at /= filter_size;
-
-      // Push filtered IMU data to BA.
-      vid_tracker->AddInertialMeasurement(aa, aw, at);
-
-      // Pop oldest measurement.
-      filter.pop_front();
-    }
-  } else {
-    // Push IMU data to BA.
-    vid_tracker->AddInertialMeasurement(a, w, IMUdata.system_time());
+  Eigen::Vector3d accel;
+  accel << IMUdata.accel().data(0),
+           IMUdata.accel().data(1),
+           IMUdata.accel().data(2);
+  if (FLAGS_imu_accel_sigma != 0.0) {
+    Eigen::Vector3d noise;
+    noise << accel_noise(pseudo_rand_num_gen),
+             accel_noise(pseudo_rand_num_gen),
+             accel_noise(pseudo_rand_num_gen);
+    accel += noise;
   }
+
+  Eigen::Vector3d gyro;
+  gyro << IMUdata.gyro().data(0),
+          IMUdata.gyro().data(1),
+          IMUdata.gyro().data(2);
+  if (FLAGS_imu_gyro_sigma != 0.0) {
+    Eigen::Vector3d noise;
+    noise << gyro_noise(pseudo_rand_num_gen),
+             gyro_noise(pseudo_rand_num_gen),
+             gyro_noise(pseudo_rand_num_gen);
+    gyro += noise;
+  }
+
+  double timestamp = IMUdata.system_time();
+
+  // Push IMU data to BA.
+  vid_tracker->AddInertialMeasurement(accel, gyro, timestamp);
 }
 
 
@@ -138,31 +161,6 @@ cv::Mat GenerateDepthmap(
 }
 #endif
 
-
-/////////////////////////////////////////////////////////////////////////////
-/// G-FLAGS
-const char* USAGE =
-"This application runs a dense or semi-dense visual inertial tracker. The\n"
-"poses are given out in robotics frame and with respect to the 'center' of\n"
-"the robot 'rig' (i.e. the origin in the camera model file).\n\n"
-"Examples: \n\n"
-" tracker -cam file:[grey=1]//~/Office/[images/le*.png,depth/le*.pdm]\n"
-"         -imu csv://~/Office/imu/ -cmod cameras.xml\n"
-" tracker -cam log://~/Office/proto.log -imu log://~/Office/proto.log\n"
-"         -cmod cameras.xml -noimu_seeding\n";
-
-DEFINE_string(cam, "", "Camera arguments for HAL driver.");
-DEFINE_string(cmod, "cameras.xml", "Camera mode file to load.");
-DEFINE_string(imu, "", "IMU arguments for HAL driver.");
-DEFINE_string(map, "", "Path containing pre-saved map.");
-DEFINE_string(poses, "", "Text file containing ground truth poses.");
-DEFINE_string(poses2, "", "Text file containing ground truth poses.");
-DEFINE_string(poses_convention, "robotics", "Convention of poses file being loaded: vision, tsukuba, robotics");
-DEFINE_int32(frame_skip, 0, "Number of frames to skip between iterations.");
-DEFINE_int32(downsample, 0, "How many times to downsample image.");
-DEFINE_double(depth_sigma, 0.0, "Gaussian noise added to perturb depth map.");
-DEFINE_double(imu_accel_sigma, 0.0, "Gaussian noise added to perturb accel data.");
-DEFINE_double(imu_gyro_sigma, 0.0, "Gaussian noise added to perturb gyro data.");
 
 
 /////////////////////////////////////////////////////////////////////////////
@@ -585,10 +583,6 @@ int main(int argc, char** argv)
 
 
       // Capture first image.
-      for (size_t ii = 0; ii < filter_size; ++ii) {
-        capture_flag = camera.Capture(*images);
-        usleep(100);
-      }
       capture_flag = camera.Capture(*images);
 
       // Set images.
