@@ -61,6 +61,10 @@ typedef Matrix<double, 6, 1> Vector6d;
 class DTrack
 {
 public:
+  struct Options {
+    bool optimize_wrt_depth_camera = false;
+  };
+
   ///////////////////////////////////////////////////////////////////////////
   DTrack(unsigned int pyramid_levels);
 
@@ -75,6 +79,10 @@ public:
       const Sophus::SE3d&       Tgd           // Input: Grey-Depth camera transform.
     );
 
+  void SetOptions(const Options& options) {
+    options_ = options;
+  }
+
   ///////////////////////////////////////////////////////////////////////////
   void SetKeyframe(
       const cv::Mat&    ref_grey,  // Input: Reference image (unsigned char format).
@@ -87,8 +95,7 @@ public:
       const cv::Mat&            live_grey,    // Input: Live image (unsigned char format).
       Sophus::SE3d&             Trl,          // Input/Output: Transform between grey cameras (vision frame/input is hint).
       Eigen::Matrix6d&          covariance,   // Output: Covariance.
-      unsigned int&             num_obs       // Output: Number of observations.
-    );
+      unsigned int&             num_obs);
 
   ///////////////////////////////////////////////////////////////////////////
   void BuildProblem(const Sophus::SE3d& Trl,
@@ -159,4 +166,6 @@ private:
   std::vector<Eigen::Matrix3d>    ref_grey_cam_model_;
   std::vector<Eigen::Matrix3d>    ref_depth_cam_model_;
   Sophus::SE3d                    Tgd_;
+
+  Options options_;
 };

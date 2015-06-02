@@ -650,8 +650,12 @@ void DTrack::BuildProblem(
   const Eigen::Matrix3d& Krg = ref_grey_cam_model_[pyramid_lvl];
   const Eigen::Matrix3d& Krd = ref_depth_cam_model_[pyramid_lvl];
 
+  CHECK_EQ(gradient_x_live_.rows, live_grey_img.rows);
+
   // Inverse transform.
-  const Eigen::Matrix3x4d KlgTlr = Klg * Tlr.matrix3x4();
+  const Eigen::Matrix3x4d KlgTlr = options_.optimize_wrt_depth_camera ?
+        Klg * (Tgd_ * Tlr).matrix3x4() :
+        Klg * Tlr.matrix3x4();
 
   for (int vv = 0; vv < ref_depth_img.rows; ++vv) {
     for (int uu = 0; uu < ref_depth_img.cols; ++uu) {
@@ -772,12 +776,21 @@ void DTrack::BuildProblem(
 
       // J = dIesm_dPl_KlgTlr * gen_i * Pr
       Eigen::Matrix<double, 1, 6> J;
-      J << dIesm_dPl_KlgTlr(0),
-           dIesm_dPl_KlgTlr(1),
-           dIesm_dPl_KlgTlr(2),
-          -dIesm_dPl_KlgTlr(1)*hPr_g(2) + dIesm_dPl_KlgTlr(2)*hPr_g(1),
-          +dIesm_dPl_KlgTlr(0)*hPr_g(2) - dIesm_dPl_KlgTlr(2)*hPr_g(0),
-          -dIesm_dPl_KlgTlr(0)*hPr_g(1) + dIesm_dPl_KlgTlr(1)*hPr_g(0);
+      if (options_.optimize_wrt_depth_camera) {
+        J << dIesm_dPl_KlgTlr(0),
+             dIesm_dPl_KlgTlr(1),
+             dIesm_dPl_KlgTlr(2),
+            -dIesm_dPl_KlgTlr(1)*hPr_d(2) + dIesm_dPl_KlgTlr(2)*hPr_d(1),
+            +dIesm_dPl_KlgTlr(0)*hPr_d(2) - dIesm_dPl_KlgTlr(2)*hPr_d(0),
+            -dIesm_dPl_KlgTlr(0)*hPr_d(1) + dIesm_dPl_KlgTlr(1)*hPr_d(0);
+      } else {
+        J << dIesm_dPl_KlgTlr(0),
+             dIesm_dPl_KlgTlr(1),
+             dIesm_dPl_KlgTlr(2),
+            -dIesm_dPl_KlgTlr(1)*hPr_g(2) + dIesm_dPl_KlgTlr(2)*hPr_g(1),
+            +dIesm_dPl_KlgTlr(0)*hPr_g(2) - dIesm_dPl_KlgTlr(2)*hPr_g(0),
+            -dIesm_dPl_KlgTlr(0)*hPr_g(1) + dIesm_dPl_KlgTlr(1)*hPr_g(0);
+      }
 
 
       ///-------------------- Depth Derivative
@@ -924,7 +937,10 @@ double DTrack::Estimate(
   num_obs = 0;
   covariance.setZero();
 
-  // Set pyramid max-iterations and full estimate mask.
+  // Set pyramid max-iterations and full estimate mask. The pyramid is
+  // constructed with the largest image first.
+
+  // 0 is rotation only, 1 is both rotation and translation
   std::vector<bool>         vec_full_estimate  = {1, 1, 1, 0};
 #if DECIMATE
   std::vector<unsigned int> vec_max_iterations = {0, 5, 5, 5};
