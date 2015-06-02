@@ -241,8 +241,8 @@ void Tracker::ConfigureBA(const std::shared_ptr<calibu::Rig<double>> rig)
   // The window is always considered batch since no pose is inactive,
   // so if this is set to true it will NOT change biases much.
   // If using datasets with no bias, set to true.
-  options.regularize_biases_in_batch  = true;
-  options.use_triangular_matrices     = true;
+  options.regularize_biases_in_batch  = false;
+  options.use_triangular_matrices     = false;
 //  options.use_robust_norm_for_inertial_residuals = true;
   // NOTE(jfalquez) When this is set to true, and no IMU residuals are added
   // an error/warning shows up.
@@ -405,7 +405,7 @@ void Tracker::Estimate(
 //  dtrack_covariance = rel_pose_estimate.Adj() * dtrack_covariance
 //      * rel_pose_estimate.Adj().transpose();
 
-  // Adjust covariance until we have an actual sensor model.
+//   Adjust covariance until we have an actual sensor model.
 //    dtrack_covariance *= 1e5;
 
 //  std::cout << "Cov:" << std::endl << dtrack_covariance << std::endl;
