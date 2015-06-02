@@ -606,6 +606,311 @@ void DTrack::SetKeyframe(
 
 #define DECIMATE 0
 
+void DTrack::ComputeGradient(uint pyramid_lvl) {
+  const cv::Mat& live_grey_img = live_grey_pyramid_[pyramid_lvl];
+  const cv::Mat& ref_grey_img  = ref_grey_pyramid_[pyramid_lvl];
+
+  // Pre-calculate gradients so we don't do it each iteration.
+  gradient_x_live_.create(live_grey_img.rows, live_grey_img.cols, CV_32FC1);
+  gradient_y_live_.create(live_grey_img.rows, live_grey_img.cols, CV_32FC1);
+  gradient_x_ref_.create(live_grey_img.rows, live_grey_img.cols, CV_32FC1);
+  gradient_y_ref_.create(live_grey_img.rows, live_grey_img.cols, CV_32FC1);
+  _CalculateGradients(
+        live_grey_img.data, live_grey_img.cols, live_grey_img.rows,
+        reinterpret_cast<float*>(gradient_x_live_.data),
+        reinterpret_cast<float*>(gradient_y_live_.data));
+  _CalculateGradients(
+        ref_grey_img.data, ref_grey_img.cols, ref_grey_img.rows,
+        reinterpret_cast<float*>(gradient_x_ref_.data),
+        reinterpret_cast<float*>(gradient_y_ref_.data));
+}
+
+void DTrack::BuildProblem(
+    const Sophus::SE3d& Tlr,
+    Eigen::Matrix6d&    LHS,
+    Eigen::Vector6d&    RHS,
+    double&             squared_error,
+    double&             number_observations,
+    uint                pyramid_lvl
+    ) {
+  // Options.
+  const bool   discard_saturated = FLAGS_discard_saturated;
+  const float  min_depth         = FLAGS_min_depth;
+  const float  max_depth         = FLAGS_max_depth;
+  const double norm_c            = FLAGS_norm_param;
+
+  // Set pyramid norm parameter.
+  const double norm_c_pyr = norm_c * (pyramid_lvl + 1);
+
+  const cv::Mat& live_grey_img = live_grey_pyramid_[pyramid_lvl];
+  const cv::Mat& ref_grey_img  = ref_grey_pyramid_[pyramid_lvl];
+  const cv::Mat& ref_depth_img = ref_depth_pyramid_[pyramid_lvl];
+
+  const Eigen::Matrix3d& Klg = ref_grey_cam_model_[pyramid_lvl];
+  const Eigen::Matrix3d& Krg = ref_grey_cam_model_[pyramid_lvl];
+  const Eigen::Matrix3d& Krd = ref_depth_cam_model_[pyramid_lvl];
+
+  // Inverse transform.
+  const Eigen::Matrix3x4d KlgTlr = Klg * Tlr.matrix3x4();
+
+  for (int vv = 0; vv < ref_depth_img.rows; ++vv) {
+    for (int uu = 0; uu < ref_depth_img.cols; ++uu) {
+
+      // 2d point in reference depth camera.
+      Eigen::Vector2d pr_d;
+      pr_d << uu, vv;
+
+      // Get depth.
+      const double depth = ref_depth_img.at<float>(vv, uu);
+
+      // Check if depth is NAN.
+      if (depth != depth) {
+        continue;
+      }
+
+      if (depth < min_depth || depth > max_depth) {
+        continue;
+      }
+
+      // 3d point in reference depth camera.
+      Eigen::Vector4d hPr_d;
+      hPr_d(0) = depth * (pr_d(0)-Krd(0,2))/Krd(0,0);
+      hPr_d(1) = depth * (pr_d(1)-Krd(1,2))/Krd(1,1);
+      hPr_d(2) = depth;
+      hPr_d(3) = 1;
+
+      // 3d point in reference grey camera (homogenized).
+      // If depth and grey cameras are aligned, Tgd_ = I4.
+      const Eigen::Vector4d hPr_g = Tgd_.matrix() * hPr_d;
+
+      // Project to reference grey camera's image coordinate.
+      Eigen::Vector2d pr_g;
+      pr_g(0) = (hPr_g(0)*Krg(0,0)/hPr_g(2)) + Krg(0,2);
+      pr_g(1) = (hPr_g(1)*Krg(1,1)/hPr_g(2)) + Krg(1,2);
+
+      // Check if point is out of bounds.
+      if (pr_g(0) < 2 || pr_g(0) >= ref_grey_img.cols-3
+         || pr_g(1) < 2 || pr_g(1) >= ref_grey_img.rows-3) {
+        continue;
+      }
+
+      // For semi-dense: Check if point is not an edge.
+      if (FLAGS_semi_dense) {
+        const double edge =
+            interp<unsigned char>(pr_g(0), pr_g(1),
+                                  ref_grey_edges_[pyramid_lvl].data,
+                                  ref_grey_edges_[pyramid_lvl].cols,
+                                  ref_grey_edges_[pyramid_lvl].rows);
+        if (edge == 0) {
+          continue;
+        }
+      }
+
+      // Homogenized 3d point in live grey camera.
+      const Eigen::Vector4d hPl_g = Tlr.matrix() * hPr_g;
+
+      // Project to live grey camera's image coordinate.
+      Eigen::Vector2d pl_g;
+      pl_g(0) = (hPl_g(0)*Klg(0,0)/hPl_g(2)) + Klg(0,2);
+      pl_g(1) = (hPl_g(1)*Klg(1,1)/hPl_g(2)) + Klg(1,2);
+
+      // Check if point is out of bounds.
+      if (pl_g(0) < 2 || pl_g(0) >= live_grey_img.cols-3
+         || pl_g(1) < 2 || pl_g(1) >= live_grey_img.rows-3) {
+        continue;
+      }
+
+      // Get intensities.
+      const double Il =
+          interp<unsigned char>(pl_g(0), pl_g(1), live_grey_img.data,
+                                live_grey_img.cols, live_grey_img.rows);
+      const double Ir =
+          interp<unsigned char>(pr_g(0), pr_g(1), ref_grey_img.data,
+                                ref_grey_img.cols, ref_grey_img.rows);
+
+      // Discard under/over-saturated pixels.
+      if (discard_saturated) {
+        if (Il == 0.0 || Il == 255.0 || Ir == 0.0 || Ir == 255.0) {
+          continue;
+        }
+      }
+
+      // Calculate error.
+      const double y = Il-Ir;
+
+
+      ///-------------------- Forward Compositional
+      // Image derivative.
+      Eigen::Matrix<double, 1, 2> dIl;
+      dIl(0) = interp<float>(pl_g(0), pl_g(1),
+                             reinterpret_cast<float*>(gradient_x_live_.data),
+                             gradient_x_live_.cols, gradient_x_live_.rows);
+      dIl(1) = interp<float>(pl_g(0), pl_g(1),
+                             reinterpret_cast<float*>(gradient_y_live_.data),
+                             gradient_y_live_.cols, gradient_y_live_.rows);
+
+
+      ///-------------------- Inverse Compositional
+      // Image derivative.
+      Eigen::Matrix<double, 1, 2> dIr;
+      dIr(0) = interp<float>(pr_g(0), pr_g(1),
+                             reinterpret_cast<float*>(gradient_x_ref_.data),
+                             gradient_x_ref_.cols, gradient_x_ref_.rows);
+      dIr(1) = interp<float>(pr_g(0), pr_g(1),
+                             reinterpret_cast<float*>(gradient_y_ref_.data),
+                             gradient_y_ref_.cols, gradient_y_ref_.rows);
+
+
+      // Projection & dehomogenization derivative.
+      Eigen::Vector3d KlPl = Klg * hPl_g.head(3);
+
+      Eigen::Matrix2x3d dPl;
+      dPl  << 1.0/KlPl(2), 0, -KlPl(0)/(KlPl(2)*KlPl(2)),
+          0, 1.0/KlPl(2), -KlPl(1)/(KlPl(2)*KlPl(2));
+
+      const Eigen::Vector4d dIesm_dPl_KlgTlr = ((dIl+dIr)/2.0)*dPl*KlgTlr;
+
+      // J = dIesm_dPl_KlgTlr * gen_i * Pr
+      Eigen::Matrix<double, 1, 6> J;
+      J << dIesm_dPl_KlgTlr(0),
+           dIesm_dPl_KlgTlr(1),
+           dIesm_dPl_KlgTlr(2),
+          -dIesm_dPl_KlgTlr(1)*hPr_g(2) + dIesm_dPl_KlgTlr(2)*hPr_g(1),
+          +dIesm_dPl_KlgTlr(0)*hPr_g(2) - dIesm_dPl_KlgTlr(2)*hPr_g(0),
+          -dIesm_dPl_KlgTlr(0)*hPr_g(1) + dIesm_dPl_KlgTlr(1)*hPr_g(0);
+
+
+      ///-------------------- Depth Derivative
+      // Homogenization derivative.
+      Eigen::Matrix<double, 4, 3> dPinv4;
+      dPinv4 << 1, 0, 0,
+                0, 1, 0,
+                0, 0, 1,
+                0, 0, 0;
+
+      // Homogenized depth pixel.
+      Eigen::Vector3d hpr_d;
+      hpr_d << pr_d(0), pr_d(1), 1;
+
+      // Depth derivative on live image.
+      // Jdl = dIl * dPl * Kl * Tlr * Tgd * dPinv * Kdinv * pr_d
+      const double Jdl = dIl * dPl * KlgTlr * Tgd_.matrix() * dPinv4
+                             * Krd.inverse() * hpr_d;
+
+      // Depth derivative on reference image.
+      // Projection & dehomogenization derivative.
+      Eigen::Vector3d KrPr = Krg * hPr_g.head(3);
+
+      Eigen::Matrix<double, 2, 3> dPr;
+      dPr << 1.0/KrPr(2), 0, -KrPr(0)/(KrPr(2)*KrPr(2)),
+          0, 1.0/KrPr(2), -KrPr(1)/(KrPr(2)*KrPr(2));
+
+      // Jdr = dIr * dPr * Kr * Tgd * dPinv * Kdinv * pr_d
+      const double Jdr = dIr * dPr * Krg * Tgd_.matrix3x4() * dPinv4
+                         * Krd.inverse() * hpr_d;
+
+
+      if (dIl(0) != 0 && dIl(1) != 0 && uu == 10 && vv == 10 && false) {
+        std::cout << "----------------------------" << std::endl;
+        std::cout << "Jd-a: " << Jdl - Jdr << std::endl;
+        Eigen::Vector2d tmp = dPl * KlgTlr * Tgd_.matrix() * dPinv4
+                              * Krd.inverse() * hpr_d;
+//        std::cout << "Jd-a Pix: " << tmp.transpose() << std::endl;
+
+        double epsilon = 1e-6;
+
+        // Get depth.
+        const double depthf = depth + epsilon;
+        const double depthb = depth - epsilon;
+
+        // 3d point in reference depth camera.
+        Eigen::Vector4d hPr_df;
+        hPr_df(0) = depthf * (pr_d(0)-Krd(0,2))/Krd(0,0);
+        hPr_df(1) = depthf * (pr_d(1)-Krd(1,2))/Krd(1,1);
+        hPr_df(2) = depthf;
+        hPr_df(3) = 1;
+        Eigen::Vector4d hPr_db;
+        hPr_db(0) = depthb * (pr_d(0)-Krd(0,2))/Krd(0,0);
+        hPr_db(1) = depthb * (pr_d(1)-Krd(1,2))/Krd(1,1);
+        hPr_db(2) = depthb;
+        hPr_db(3) = 1;
+
+        // 3d point in reference grey camera (homogenized).
+        // If depth and grey cameras are aligned, Tgd_ = I4.
+        const Eigen::Vector4d hPr_gf = Tgd_.matrix() * hPr_df;
+        const Eigen::Vector4d hPr_gb = Tgd_.matrix() * hPr_db;
+
+        // Project to reference grey camera's image coordinate.
+        Eigen::Vector2d pr_gf;
+        pr_gf(0) = (hPr_gf(0)*Krg(0,0)/hPr_gf(2)) + Krg(0,2);
+        pr_gf(1) = (hPr_gf(1)*Krg(1,1)/hPr_gf(2)) + Krg(1,2);
+        Eigen::Vector2d pr_gb;
+        pr_gb(0) = (hPr_gb(0)*Krg(0,0)/hPr_gb(2)) + Krg(0,2);
+        pr_gb(1) = (hPr_gb(1)*Krg(1,1)/hPr_gb(2)) + Krg(1,2);
+
+        // Homogenized 3d point in live grey camera.
+        const Eigen::Vector4d hPl_gf = Tlr.matrix() * hPr_gf;
+        const Eigen::Vector4d hPl_gb = Tlr.matrix() * hPr_gb;
+
+        // Project to live grey camera's image coordinate.
+        Eigen::Vector2d pl_gf;
+        pl_gf(0) = (hPl_gf(0)*Klg(0,0)/hPl_gf(2)) + Klg(0,2);
+        pl_gf(1) = (hPl_gf(1)*Klg(1,1)/hPl_gf(2)) + Klg(1,2);
+        Eigen::Vector2d pl_gb;
+        pl_gb(0) = (hPl_gb(0)*Klg(0,0)/hPl_gb(2)) + Klg(0,2);
+        pl_gb(1) = (hPl_gb(1)*Klg(1,1)/hPl_gb(2)) + Klg(1,2);
+
+        // Get intensities.
+        const double Ilf =
+            interp(pl_gf(0), pl_gf(1), live_grey_img.data,
+                   live_grey_img.cols, live_grey_img.rows);
+        const double Irf =
+            interp(pr_gf(0), pr_gf(1), ref_grey_img.data,
+                   ref_grey_img.cols, ref_grey_img.rows);
+        const double Ilb =
+            interp(pl_gb(0), pl_gb(1), live_grey_img.data,
+                   live_grey_img.cols, live_grey_img.rows);
+        const double Irb =
+            interp(pr_gb(0), pr_gb(1), ref_grey_img.data,
+                   ref_grey_img.cols, ref_grey_img.rows);
+
+
+        std::cout << "Jd-fd: " << ((Ilf-Irf) - (Ilb-Irb))/(depthf-depthb) << std::endl;
+//        std::cout << "Jd-fd Pix: " << ((pl_gf-pl_gb)/(depthf-depthb)).transpose() << std::endl;
+      }
+
+
+      // Final depth Jacobian: Jd = Jdl - Jdr
+      double Jd = Jdl - Jdr;
+      if (Jd == 0) {
+        Jd = FLT_MIN;
+      }
+
+
+      ///-------------------- Robust Norm
+      const double w = _NormTukey(y, norm_c_pyr);
+
+      // Uncertainties.
+//          const double depth_sigma = depth/20.0;
+      const double depth_sigma = kDepthSigma;
+
+      // Error prop: NewSigma = J * Sigma * J_transpose
+      const double depth_unc = Jd * (depth_sigma*depth_sigma) * Jd;
+
+      // Try gradient as uncertainty. Makes more sense for ELAS.
+      // Do finite differences on edge pixel to test all the way.
+      const double inv_sigma = 1.0/((kGreySigma*kGreySigma)+depth_unc);
+//          const double inv_sigma = 1.0/(kGreySigma*kGreySigma);
+//          const double inv_sigma = 1.0;
+
+      LHS           += J.transpose() * w * inv_sigma * J;
+      RHS           += J.transpose() * w * inv_sigma * y;
+      squared_error += y * y;
+      number_observations++;
+    }
+  }
+}
+
 ///////////////////////////////////////////////////////////////////////////
 double DTrack::Estimate(
     bool                      use_pyramid,
@@ -618,12 +923,6 @@ double DTrack::Estimate(
   // Reset output parameters.
   num_obs = 0;
   covariance.setZero();
-
-  // Options.
-  const double norm_c            = FLAGS_norm_param;
-  const bool   discard_saturated = FLAGS_discard_saturated;
-  const float  min_depth         = FLAGS_min_depth;
-  const float  max_depth         = FLAGS_max_depth;
 
   // Set pyramid max-iterations and full estimate mask.
   std::vector<bool>         vec_full_estimate  = {1, 1, 1, 0};
@@ -656,7 +955,6 @@ double DTrack::Estimate(
 #endif
 
   // Aux variables.
-  Eigen::Matrix6d   hessian;
   Eigen::Matrix6d   LHS;
   Eigen::Vector6d   RHS;
   double            squared_error;
@@ -665,39 +963,14 @@ double DTrack::Estimate(
 
   // Iterate through pyramid levels.
   for (int pyramid_lvl = kPyramidLevels-1; pyramid_lvl >= 0; pyramid_lvl--) {
-    const cv::Mat& live_grey_img = live_grey_pyramid_[pyramid_lvl];
-    const cv::Mat& ref_grey_img  = ref_grey_pyramid_[pyramid_lvl];
-    const cv::Mat& ref_depth_img = ref_depth_pyramid_[pyramid_lvl];
-
-    const Eigen::Matrix3d& Klg = ref_grey_cam_model_[pyramid_lvl];
-    const Eigen::Matrix3d& Krg = ref_grey_cam_model_[pyramid_lvl];
-    const Eigen::Matrix3d& Krd = ref_depth_cam_model_[pyramid_lvl];
-
-    // Pre-calculate gradients so we don't do it each iteration.
-    cv::Mat gradient_x_live(live_grey_img.rows, live_grey_img.cols, CV_32FC1);
-    cv::Mat gradient_y_live(live_grey_img.rows, live_grey_img.cols, CV_32FC1);
-    cv::Mat gradient_x_ref(live_grey_img.rows, live_grey_img.cols, CV_32FC1);
-    cv::Mat gradient_y_ref(live_grey_img.rows, live_grey_img.cols, CV_32FC1);
-    _CalculateGradients(
-          live_grey_img.data, live_grey_img.cols, live_grey_img.rows,
-          reinterpret_cast<float*>(gradient_x_live.data),
-          reinterpret_cast<float*>(gradient_y_live.data));
-    _CalculateGradients(
-          ref_grey_img.data, ref_grey_img.cols, ref_grey_img.rows,
-          reinterpret_cast<float*>(gradient_x_ref.data),
-          reinterpret_cast<float*>(gradient_y_ref.data));
-
+    ComputeGradient(pyramid_lvl);
     // Reset error.
     last_error = FLT_MAX;
-
-    // Set pyramid norm parameter.
-    const double norm_c_pyr = norm_c*(pyramid_lvl+1);
 
     for (unsigned int num_iters = 0;
          num_iters < vec_max_iterations[pyramid_lvl];
          ++num_iters) {
       // Reset.
-      hessian.setZero();
       LHS.setZero();
       RHS.setZero();
 
@@ -705,9 +978,8 @@ double DTrack::Estimate(
       squared_error        = 0;
       number_observations  = 0;
 
-      // Inverse transform.
-      const Sophus::SE3d      Tlr    = Trl.inverse();
-      const Eigen::Matrix3x4d KlgTlr = Klg*Tlr.matrix3x4();
+      const Sophus::SE3d Tlr = Trl.inverse();
+
 
 #if defined(VIDTRACK_USE_CUDA)
       cu_dtrack_->Estimate(live_grey_img, ref_grey_img, ref_depth_img, Klg,
@@ -733,264 +1005,11 @@ double DTrack::Estimate(
 
 #else
       // Iterate through depth map.
-      for (int vv = 0; vv < ref_depth_img.rows; ++vv) {
-        for (int uu = 0; uu < ref_depth_img.cols; ++uu) {
-
-          // 2d point in reference depth camera.
-          Eigen::Vector2d pr_d;
-          pr_d << uu, vv;
-
-          // Get depth.
-          const double depth = ref_depth_img.at<float>(vv, uu);
-
-          // Check if depth is NAN.
-          if (depth != depth) {
-            continue;
-          }
-
-          if (depth < min_depth || depth > max_depth) {
-            continue;
-          }
-
-          // 3d point in reference depth camera.
-          Eigen::Vector4d hPr_d;
-          hPr_d(0) = depth * (pr_d(0)-Krd(0,2))/Krd(0,0);
-          hPr_d(1) = depth * (pr_d(1)-Krd(1,2))/Krd(1,1);
-          hPr_d(2) = depth;
-          hPr_d(3) = 1;
-
-          // 3d point in reference grey camera (homogenized).
-          // If depth and grey cameras are aligned, Tgd_ = I4.
-          const Eigen::Vector4d hPr_g = Tgd_.matrix() * hPr_d;
-
-          // Project to reference grey camera's image coordinate.
-          Eigen::Vector2d pr_g;
-          pr_g(0) = (hPr_g(0)*Krg(0,0)/hPr_g(2)) + Krg(0,2);
-          pr_g(1) = (hPr_g(1)*Krg(1,1)/hPr_g(2)) + Krg(1,2);
-
-          // Check if point is out of bounds.
-          if (pr_g(0) < 2 || pr_g(0) >= ref_grey_img.cols-3
-             || pr_g(1) < 2 || pr_g(1) >= ref_grey_img.rows-3) {
-            continue;
-          }
-
-          // For semi-dense: Check if point is not an edge.
-          if (FLAGS_semi_dense) {
-            const double edge =
-                interp<unsigned char>(pr_g(0), pr_g(1),
-                                      ref_grey_edges_[pyramid_lvl].data,
-                                      ref_grey_edges_[pyramid_lvl].cols,
-                                      ref_grey_edges_[pyramid_lvl].rows);
-            if (edge == 0) {
-              continue;
-            }
-          }
-
-          // Homogenized 3d point in live grey camera.
-          const Eigen::Vector4d hPl_g = Tlr.matrix() * hPr_g;
-
-          // Project to live grey camera's image coordinate.
-          Eigen::Vector2d pl_g;
-          pl_g(0) = (hPl_g(0)*Klg(0,0)/hPl_g(2)) + Klg(0,2);
-          pl_g(1) = (hPl_g(1)*Klg(1,1)/hPl_g(2)) + Klg(1,2);
-
-          // Check if point is out of bounds.
-          if (pl_g(0) < 2 || pl_g(0) >= live_grey_img.cols-3
-             || pl_g(1) < 2 || pl_g(1) >= live_grey_img.rows-3) {
-            continue;
-          }
-
-          // Get intensities.
-          const double Il =
-              interp<unsigned char>(pl_g(0), pl_g(1), live_grey_img.data,
-                                    live_grey_img.cols, live_grey_img.rows);
-          const double Ir =
-              interp<unsigned char>(pr_g(0), pr_g(1), ref_grey_img.data,
-                                    ref_grey_img.cols, ref_grey_img.rows);
-
-          // Discard under/over-saturated pixels.
-          if (discard_saturated) {
-            if (Il == 0.0 || Il == 255.0 || Ir == 0.0 || Ir == 255.0) {
-              continue;
-            }
-          }
-
-          // Calculate error.
-          const double y = Il-Ir;
-
-
-          ///-------------------- Forward Compositional
-          // Image derivative.
-          Eigen::Matrix<double, 1, 2> dIl;
-          dIl(0) = interp<float>(pl_g(0), pl_g(1),
-                                 reinterpret_cast<float*>(gradient_x_live.data),
-                                 gradient_x_live.cols, gradient_x_live.rows);
-          dIl(1) = interp<float>(pl_g(0), pl_g(1),
-                                 reinterpret_cast<float*>(gradient_y_live.data),
-                                 gradient_y_live.cols, gradient_y_live.rows);
-
-
-          ///-------------------- Inverse Compositional
-          // Image derivative.
-          Eigen::Matrix<double, 1, 2> dIr;
-          dIr(0) = interp<float>(pr_g(0), pr_g(1),
-                                 reinterpret_cast<float*>(gradient_x_ref.data),
-                                 gradient_x_ref.cols, gradient_x_ref.rows);
-          dIr(1) = interp<float>(pr_g(0), pr_g(1),
-                                 reinterpret_cast<float*>(gradient_y_ref.data),
-                                 gradient_y_ref.cols, gradient_y_ref.rows);
-
-
-          // Projection & dehomogenization derivative.
-          Eigen::Vector3d KlPl = Klg * hPl_g.head(3);
-
-          Eigen::Matrix2x3d dPl;
-          dPl  << 1.0/KlPl(2), 0, -KlPl(0)/(KlPl(2)*KlPl(2)),
-              0, 1.0/KlPl(2), -KlPl(1)/(KlPl(2)*KlPl(2));
-
-          const Eigen::Vector4d dIesm_dPl_KlgTlr = ((dIl+dIr)/2.0)*dPl*KlgTlr;
-
-          // J = dIesm_dPl_KlgTlr * gen_i * Pr
-          Eigen::Matrix<double, 1, 6> J;
-          J << dIesm_dPl_KlgTlr(0),
-               dIesm_dPl_KlgTlr(1),
-               dIesm_dPl_KlgTlr(2),
-              -dIesm_dPl_KlgTlr(1)*hPr_g(2) + dIesm_dPl_KlgTlr(2)*hPr_g(1),
-              +dIesm_dPl_KlgTlr(0)*hPr_g(2) - dIesm_dPl_KlgTlr(2)*hPr_g(0),
-              -dIesm_dPl_KlgTlr(0)*hPr_g(1) + dIesm_dPl_KlgTlr(1)*hPr_g(0);
-
-
-          ///-------------------- Depth Derivative
-          // Homogenization derivative.
-          Eigen::Matrix<double, 4, 3> dPinv4;
-          dPinv4 << 1, 0, 0,
-                    0, 1, 0,
-                    0, 0, 1,
-                    0, 0, 0;
-
-          // Homogenized depth pixel.
-          Eigen::Vector3d hpr_d;
-          hpr_d << pr_d(0), pr_d(1), 1;
-
-          // Depth derivative on live image.
-          // Jdl = dIl * dPl * Kl * Tlr * Tgd * dPinv * Kdinv * pr_d
-          const double Jdl = dIl * dPl * KlgTlr * Tgd_.matrix() * dPinv4
-                                 * Krd.inverse() * hpr_d;
-
-          // Depth derivative on reference image.
-          // Projection & dehomogenization derivative.
-          Eigen::Vector3d KrPr = Krg * hPr_g.head(3);
-
-          Eigen::Matrix<double, 2, 3> dPr;
-          dPr << 1.0/KrPr(2), 0, -KrPr(0)/(KrPr(2)*KrPr(2)),
-              0, 1.0/KrPr(2), -KrPr(1)/(KrPr(2)*KrPr(2));
-
-          // Jdr = dIr * dPr * Kr * Tgd * dPinv * Kdinv * pr_d
-          const double Jdr = dIr * dPr * Krg * Tgd_.matrix3x4() * dPinv4
-                             * Krd.inverse() * hpr_d;
-
-
-          if (dIl(0) != 0 && dIl(1) != 0 && uu == 10 && vv == 10 && false) {
-            std::cout << "----------------------------" << std::endl;
-            std::cout << "Jd-a: " << Jdl - Jdr << std::endl;
-            Eigen::Vector2d tmp = dPl * KlgTlr * Tgd_.matrix() * dPinv4
-                                  * Krd.inverse() * hpr_d;
-    //        std::cout << "Jd-a Pix: " << tmp.transpose() << std::endl;
-
-            double epsilon = 1e-6;
-
-            // Get depth.
-            const double depthf = depth + epsilon;
-            const double depthb = depth - epsilon;
-
-            // 3d point in reference depth camera.
-            Eigen::Vector4d hPr_df;
-            hPr_df(0) = depthf * (pr_d(0)-Krd(0,2))/Krd(0,0);
-            hPr_df(1) = depthf * (pr_d(1)-Krd(1,2))/Krd(1,1);
-            hPr_df(2) = depthf;
-            hPr_df(3) = 1;
-            Eigen::Vector4d hPr_db;
-            hPr_db(0) = depthb * (pr_d(0)-Krd(0,2))/Krd(0,0);
-            hPr_db(1) = depthb * (pr_d(1)-Krd(1,2))/Krd(1,1);
-            hPr_db(2) = depthb;
-            hPr_db(3) = 1;
-
-            // 3d point in reference grey camera (homogenized).
-            // If depth and grey cameras are aligned, Tgd_ = I4.
-            const Eigen::Vector4d hPr_gf = Tgd_.matrix() * hPr_df;
-            const Eigen::Vector4d hPr_gb = Tgd_.matrix() * hPr_db;
-
-            // Project to reference grey camera's image coordinate.
-            Eigen::Vector2d pr_gf;
-            pr_gf(0) = (hPr_gf(0)*Krg(0,0)/hPr_gf(2)) + Krg(0,2);
-            pr_gf(1) = (hPr_gf(1)*Krg(1,1)/hPr_gf(2)) + Krg(1,2);
-            Eigen::Vector2d pr_gb;
-            pr_gb(0) = (hPr_gb(0)*Krg(0,0)/hPr_gb(2)) + Krg(0,2);
-            pr_gb(1) = (hPr_gb(1)*Krg(1,1)/hPr_gb(2)) + Krg(1,2);
-
-            // Homogenized 3d point in live grey camera.
-            const Eigen::Vector4d hPl_gf = Tlr.matrix() * hPr_gf;
-            const Eigen::Vector4d hPl_gb = Tlr.matrix() * hPr_gb;
-
-            // Project to live grey camera's image coordinate.
-            Eigen::Vector2d pl_gf;
-            pl_gf(0) = (hPl_gf(0)*Klg(0,0)/hPl_gf(2)) + Klg(0,2);
-            pl_gf(1) = (hPl_gf(1)*Klg(1,1)/hPl_gf(2)) + Klg(1,2);
-            Eigen::Vector2d pl_gb;
-            pl_gb(0) = (hPl_gb(0)*Klg(0,0)/hPl_gb(2)) + Klg(0,2);
-            pl_gb(1) = (hPl_gb(1)*Klg(1,1)/hPl_gb(2)) + Klg(1,2);
-
-            // Get intensities.
-            const double Ilf =
-                interp(pl_gf(0), pl_gf(1), live_grey_img.data,
-                       live_grey_img.cols, live_grey_img.rows);
-            const double Irf =
-                interp(pr_gf(0), pr_gf(1), ref_grey_img.data,
-                       ref_grey_img.cols, ref_grey_img.rows);
-            const double Ilb =
-                interp(pl_gb(0), pl_gb(1), live_grey_img.data,
-                       live_grey_img.cols, live_grey_img.rows);
-            const double Irb =
-                interp(pr_gb(0), pr_gb(1), ref_grey_img.data,
-                       ref_grey_img.cols, ref_grey_img.rows);
-
-
-            std::cout << "Jd-fd: " << ((Ilf-Irf) - (Ilb-Irb))/(depthf-depthb) << std::endl;
-    //        std::cout << "Jd-fd Pix: " << ((pl_gf-pl_gb)/(depthf-depthb)).transpose() << std::endl;
-          }
-
-
-          // Final depth Jacobian: Jd = Jdl - Jdr
-          double Jd = Jdl - Jdr;
-          if (Jd == 0) {
-            Jd = FLT_MIN;
-          }
-
-
-          ///-------------------- Robust Norm
-          const double w = _NormTukey(y, norm_c_pyr);
-
-          // Uncertainties.
-//          const double depth_sigma = depth/20.0;
-          const double depth_sigma = kDepthSigma;
-
-          // Error prop: NewSigma = J * Sigma * J_transpose
-          const double depth_unc = Jd * (depth_sigma*depth_sigma) * Jd;
-
-          // Try gradient as uncertainty. Makes more sense for ELAS.
-          // Do finite differences on edge pixel to test all the way.
-          const double inv_sigma = 1.0/((kGreySigma*kGreySigma)+depth_unc);
-//          const double inv_sigma = 1.0/(kGreySigma*kGreySigma);
-//          const double inv_sigma = 1.0;
-
-          hessian       += J.transpose() * w * inv_sigma * J;
-          LHS           += J.transpose() * w * inv_sigma * J;
-          RHS           += J.transpose() * w * inv_sigma * y;
-          squared_error += y * y;
-          number_observations++;
-        }
-      }
+      BuildProblem(Tlr, LHS, RHS, squared_error, number_observations,
+                   pyramid_lvl);
 #endif
+
+      Eigen::Matrix6d hessian = LHS;
 
       // Solution.
       Eigen::Vector6d X;

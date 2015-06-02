@@ -90,6 +90,17 @@ public:
       unsigned int&             num_obs       // Output: Number of observations.
     );
 
+  ///////////////////////////////////////////////////////////////////////////
+  void BuildProblem(const Sophus::SE3d& Trl,
+                    Eigen::Matrix6d&    LHS,
+                    Eigen::Vector6d&    RHS,
+                    double&             squared_error,
+                    double&             number_observations,
+                    uint                pyramid_lvl);
+
+  ///////////////////////////////////////////////////////////////////////////
+  void ComputeGradient(uint pyramid_lvl);
+
 private:
   ///////////////////////////////////////////////////////////////////////////
   Eigen::Matrix3d  _ScaleCM(
@@ -122,13 +133,11 @@ private:
       size_t          image_size    //< Input: Number of pixels in image
     );
 
-
   ///////////////////////////////////////////////////////////////////////////
 public:
   const double       kGreySigma = 1.0;
   const double       kDepthSigma = 0.01;
   const unsigned int kPyramidLevels;
-
 private:
 #ifdef VIDTRACK_USE_CUDA
   cuDTrack*                       cu_dtrack_;
@@ -136,6 +145,11 @@ private:
 #ifdef VIDTRACK_USE_TBB
   tbb::task_scheduler_init        tbb_scheduler_;
 #endif
+  cv::Mat                         gradient_x_live_;
+  cv::Mat                         gradient_y_live_;
+  cv::Mat                         gradient_x_ref_;
+  cv::Mat                         gradient_y_ref_;
+
   std::vector<cv::Mat>            live_grey_pyramid_;
   std::vector<cv::Mat>            live_depth_pyramid_;
   std::vector<cv::Mat>            ref_grey_edges_;
