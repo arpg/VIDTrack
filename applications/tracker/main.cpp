@@ -80,7 +80,8 @@ DEFINE_string(poses2, "", "Text file containing ground truth poses.");
 DEFINE_string(poses_convention, "robotics", "Convention of poses file being loaded: vision, tsukuba, robotics");
 DEFINE_int32(frame_skip, 0, "Number of frames to skip between iterations.");
 DEFINE_int32(downsample, 0, "How many times to downsample image.");
-DEFINE_double(depth_sigma, 0.0, "Gaussian noise added to perturb depth map.");
+DEFINE_int32(image_sigma, 0, "Gaussian noise added to perturb image (in pixels).");
+DEFINE_double(depth_sigma, 0.0, "Gaussian noise added to perturb depth map (in meters).");
 DEFINE_double(imu_accel_sigma, 0.0, "Gaussian noise added to perturb accel data.");
 DEFINE_double(imu_gyro_sigma, 0.0, "Gaussian noise added to perturb gyro data.");
 /////////////////////////////////////////////////////////////////////////////
@@ -540,12 +541,15 @@ int main(int argc, char** argv)
 
   // Open file for saving poses.
   std::ofstream output_file;
-  output_file.open("poses.txt");
+  output_file.open("stats.txt");
 
   Sophus::SE3d  last_estimate;
   Sophus::SE3d  estimated_segment;
-  int           num_segments                    = 0;
-  double        accum_error                     = 0;
+  double        estimation_time                 = 0;
+  unsigned int  num_segments                    = 0;
+  unsigned int  num_iterations                  = 0;
+  double        accum_translation_error         = 0;
+  double        accum_rotation_error            = 0;
   double        total_trajectory                = 0;
   double        total_trajectory_per_segment    = 0;
   double        translation_error_per_segment   = 0;
@@ -591,8 +595,8 @@ int main(int argc, char** argv)
       // Save first pose.
 //      output_file << SceneGraph::GLT2Cart(ba_accum_rel_pose.matrix()).transpose()
 //                  << std::endl;
-      Eigen::Map<Eigen::Matrix<double,7,1>> mat(ba_accum_rel_pose.data());
-      output_file << mat.transpose().format(kLongCsvFmt) << std::endl;
+//      Eigen::Map<Eigen::Matrix<double,7,1>> mat(ba_accum_rel_pose.data());
+//      output_file << mat.transpose().format(kLongCsvFmt) << std::endl;
 
 
       // Capture first image.
@@ -610,6 +614,13 @@ int main(int argc, char** argv)
       } else {
         current_grey_image = images->at(0)->Mat().clone();
         current_depth_map = images->at(1)->Mat().clone();
+      }
+
+      // Add noise to image.
+      if (FLAGS_image_sigma != 0) {
+        cv::Mat image_noise(current_grey_image.rows, current_grey_image.cols, CV_8UC1);
+        cv::randn(image_noise, 0, FLAGS_image_sigma);
+        current_grey_image += image_noise;
       }
 
       // Add noise to depth map.
@@ -679,26 +690,33 @@ int main(int argc, char** argv)
       }
 
       if (capture_flag == false) {
-        std::cout << "Last Pose: " << SceneGraph::GLT2Cart(ba_accum_rel_pose.matrix()).transpose() << std::endl;
-        std::cout << "Numer of Segments: " << num_segments << std::endl;
-        std::cout << "Numer of Poses: " << frame_index << std::endl;
-        std::cout << "Numer of GT Poses: " << num_gt_poses << std::endl;
-        std::cout << "Total Trajectory: " << total_trajectory_per_segment << std::endl;
-//        CHECK_EQ(frame_index, num_gt_poses);
+//        std::cout << "Last Pose: " << SceneGraph::GLT2Cart(ba_accum_rel_pose.matrix()).transpose() << std::endl;
+//        std::cout << "Number of Segments: " << num_segments << std::endl;
+        std::cout << "Number of Poses: " << frame_index << std::endl;
+        std::cout << "Number of GT Poses: " << num_gt_poses << std::endl;
+        std::cout << "Number of Iterations: " << num_iterations << std::endl;
+        std::cout << "Total Trajectory: " << total_trajectory << std::endl;
+//        std::cout << "Total Trajectory per Segment: " << total_trajectory_per_segment << std::endl;
         Sophus::SE3d gt_pose;
         gt_pose = ((poses[0] * Tic.inverse()).inverse() * poses[frame_index-1] * Tic.inverse());
 
-        std::cout << "Final Translation Error: "
-                  << (ba_accum_rel_pose.inverse() * gt_pose).translation().norm()
-                  << std::endl;
-        std::cout << "Mean Translation Error per Segment: "
-                  << translation_error_per_segment/num_segments << std::endl;
-        std::cout << "Mean Rotation Error per Segment: "
-                  << rotation_error_per_segment/num_segments << std::endl;
-        std::cout << "Mean Translation Error per Estimate: "
-                  << translation_error_per_estimate/(frame_index-1) << std::endl;
-        std::cout << "Mean Rotation Error per Estimate: "
-                  << rotation_error_per_estimate/(frame_index-1) << std::endl;
+//        std::cout << "Final Translation Error: "
+//                  << (ba_accum_rel_pose.inverse() * gt_pose).translation().norm()
+//                  << std::endl;
+//        std::cout << "Mean Translation Error per Segment: "
+//                  << translation_error_per_segment/num_segments << std::endl;
+//        std::cout << "Mean Rotation Error per Segment: "
+//                  << rotation_error_per_segment/num_segments << std::endl;
+//        std::cout << "Mean Translation Error per Estimate: "
+//                  << translation_error_per_estimate/(frame_index-1) << std::endl;
+//        std::cout << "Mean Rotation Error per Estimate: "
+//                  << rotation_error_per_estimate/(frame_index-1) << std::endl;
+        std::cout << "Mean Translation Estimation Error (by trajectory): "
+                  << accum_translation_error/total_trajectory << std::endl;
+        std::cout << "Mean Rotation Estimation Error (by trajectory): "
+                  << accum_rotation_error/total_trajectory << std::endl;
+        std::cout << "Mean Estimation Time (by trajectory): "
+                  << estimation_time/total_trajectory << std::endl;
         paused = true;
       } else {
         // Set images.
@@ -713,6 +731,13 @@ int main(int argc, char** argv)
         } else {
           current_grey_image = images->at(0)->Mat().clone();
           current_depth_map = images->at(1)->Mat().clone();
+        }
+
+        // Add noise to image.
+        if (FLAGS_image_sigma != 0) {
+          cv::Mat image_noise(current_grey_image.rows, current_grey_image.cols, CV_8UC1);
+          cv::randn(image_noise, 0, FLAGS_image_sigma);
+          current_grey_image += image_noise;
         }
 
         // Add noise to depth map.
@@ -754,8 +779,11 @@ int main(int argc, char** argv)
           ba_global_pose = current_pose;
           ba_accum_rel_pose = current_pose;
         } else {
+          unsigned int num_iters;
+          double time = hal::Tic();
           vid_tracker.Estimate(current_grey_image, current_depth_map,
-                             current_time, ba_global_pose, rel_pose, vo);
+                             current_time, ba_global_pose, rel_pose, vo, num_iters);
+          estimation_time += hal::Toc(time);
 
           Sophus::SE3d gt_relative;
           gt_relative = ((poses[frame_index-1] * Tic.inverse()).inverse()
@@ -768,6 +796,7 @@ int main(int argc, char** argv)
 
           estimated_segment *= rel_pose;
           last_estimate = rel_pose;
+          num_iterations += num_iters;
 
           // Uncomment this if poses are to be seen in camera frame (robotics).
 //          ba_accum_rel_pose *= Tic.inverse() * rel_pose * Tic;
@@ -788,8 +817,8 @@ int main(int argc, char** argv)
         // Save poses.
 //        Eigen::Vector6d tmp = SceneGraph::GLT2Cart(ba_accum_rel_pose.matrix());
 //        output_file << tmp.transpose() << std::endl;
-        Eigen::Map<Eigen::Matrix<double,7,1>> mat(ba_accum_rel_pose.data());
-        output_file << mat.transpose().format(kLongCsvFmt) << std::endl;
+//        Eigen::Map<Eigen::Matrix<double,7,1>> mat(ba_accum_rel_pose.data());
+//        output_file << mat.transpose().format(kLongCsvFmt) << std::endl;
 
         ///----- Update GUI objects.
         // Update poses.
@@ -814,12 +843,14 @@ int main(int argc, char** argv)
           gt_rel_transform = ((poses[frame_index-1] * Tic.inverse()).inverse()
               * poses[frame_index] * Tic.inverse());
 
-          accum_error += (last_estimate.inverse() * gt_rel_transform).translation().norm();
-          std::cout << "Error Estimate: " << (last_estimate.inverse() * gt_rel_transform).translation().norm() << std::endl;
+          accum_translation_error += (last_estimate.inverse() * gt_rel_transform).translation().norm();
+          accum_rotation_error +=
+              SceneGraph::GLT2Cart((last_estimate.inverse() * gt_rel_transform).matrix()).tail(3).norm();
+//          std::cout << "Error Estimate: " << (last_estimate.inverse() * gt_rel_transform).translation().norm() << std::endl;
 
 
           // Only calculate error of equal segments between frame rates.
-          if (frame_index % gt_ratio == 0) {
+          if (frame_index % gt_ratio == 0 && false) {
             Sophus::SE3d gt_segment;
             gt_segment = ((poses[num_segments*gt_ratio] * Tic.inverse()).inverse()
                 * poses[(num_segments+1)*gt_ratio] * Tic.inverse());

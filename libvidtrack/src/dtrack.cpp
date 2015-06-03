@@ -930,11 +930,13 @@ double DTrack::Estimate(
     const cv::Mat&            live_grey,
     Sophus::SE3d&             Trl,
     Eigen::Matrix6d&          covariance,
-    unsigned int&             num_obs
+    unsigned int&             number_obs,
+    unsigned int&             number_iters
   )
 {
   // Reset output parameters.
-  num_obs = 0;
+  number_obs     = 0;
+  number_iters   = 0;
   covariance.setZero();
 
   // Set pyramid max-iterations and full estimate mask. The pyramid is
@@ -945,7 +947,7 @@ double DTrack::Estimate(
 #if DECIMATE
   std::vector<unsigned int> vec_max_iterations = {0, 5, 5, 5};
 #else
-  std::vector<unsigned int> vec_max_iterations = {5, 5, 5, 5};
+  std::vector<unsigned int> vec_max_iterations = {50, 50, 50, 50};
 #endif
 
   if (use_pyramid == false) {
@@ -994,8 +996,10 @@ double DTrack::Estimate(
       squared_error        = 0;
       number_observations  = 0;
 
-      const Sophus::SE3d Tlr = Trl.inverse();
+      // Increase number of iterations.
+      number_iters++;
 
+      const Sophus::SE3d Tlr = Trl.inverse();
 
 #if defined(VIDTRACK_USE_CUDA)
       cu_dtrack_->Estimate(live_grey_img, ref_grey_img, ref_depth_img, Klg,
@@ -1075,7 +1079,7 @@ double DTrack::Estimate(
         last_error = new_error;
 
         // Update number of observations used in estimation.
-        num_obs = number_observations;
+        number_obs = number_observations;
 
         // Set covariance output.
         covariance = hessian.inverse();

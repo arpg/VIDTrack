@@ -98,14 +98,13 @@ public:
 
 
   ///////////////////////////////////////////////////////////////////////////
-  void Estimate(
-      const cv::Mat&  grey_image,
+  void Estimate(const cv::Mat&  grey_image,
       const cv::Mat&  depth_image,
       double          time,
       Sophus::SE3d&   global_pose,
       Sophus::SE3d&   rel_pose,
-      Sophus::SE3d&   vo_pose
-    );
+      Sophus::SE3d&   vo_pose,
+      unsigned int&   num_iters);
 
 
   ///////////////////////////////////////////////////////////////////////////

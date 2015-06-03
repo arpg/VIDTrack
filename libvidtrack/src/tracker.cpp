@@ -326,7 +326,8 @@ void Tracker::Estimate(
     double          time,
     Sophus::SE3d&   global_pose,
     Sophus::SE3d&   rel_pose,
-    Sophus::SE3d&   vo_pose
+    Sophus::SE3d&   vo_pose,
+    unsigned int&   num_iters
   )
 {
   CHECK(config_ba_ && config_dtrack_)
@@ -386,10 +387,10 @@ void Tracker::Estimate(
     // place to add it before calling DTrack's estimate. Do not use it on the
     // else statement, since rel_pose_estimate should have IMU integration.
     dtrack_error = dtrack_.Estimate(true, grey_image, rel_pose_estimate,
-                                    dtrack_covariance, dtrack_num_obs);
+                                    dtrack_covariance, dtrack_num_obs, num_iters);
   } else {
     dtrack_error = dtrack_.Estimate(false, grey_image, rel_pose_estimate,
-                                    dtrack_covariance, dtrack_num_obs);
+                                    dtrack_covariance, dtrack_num_obs, num_iters);
   }
 
   LOG_IF(WARNING, dtrack_num_obs < (grey_image.cols*grey_image.rows*0.3))
@@ -608,12 +609,13 @@ void Tracker::RefinePose(
   Tkc = Trv.inverse() * Tkc * Trv;
 
   /// RGBD pose estimation.
+  unsigned int        dtrack_num_iters;
   unsigned int        dtrack_num_obs;
   double              dtrack_error;
   Eigen::Matrix6d     dtrack_covariance;
 
   dtrack_error = dtrack_refine_.Estimate(true, grey_image, Tkc,
-                                  dtrack_covariance, dtrack_num_obs);
+                                  dtrack_covariance, dtrack_num_obs, dtrack_num_iters);
 
   LOG_IF(WARNING, dtrack_num_obs < (grey_image.cols*grey_image.rows*0.3))
       << "Number of observations for DTrack is less than 30%!";
@@ -856,9 +858,10 @@ void Tracker::RunBatchBAwithLC()
       double              dtrack_error;
       Sophus::SE3d        Trl;
       unsigned int        dtrack_num_obs;
+      unsigned int        dtrack_num_iters;
       Eigen::Matrix6d     dtrack_covariance;
       dtrack_error = dtrack_.Estimate(true, dtrack_match.grey_img, Trl,
-                                      dtrack_covariance, dtrack_num_obs);
+                                      dtrack_covariance, dtrack_num_obs, dtrack_num_iters);
 
       // Transfer relative pose to IMU frame.
       Trl = Tic_ * Trl * Tic_.inverse();
@@ -928,9 +931,10 @@ bool Tracker::WhereAmI(
     double              dtrack_error;
     Sophus::SE3d        Tkc;
     unsigned int        dtrack_num_obs;
+    unsigned int        dtrack_num_iters;
     Eigen::Matrix6d     dtrack_covariance;
     dtrack_error = dtrack_refine_.Estimate(true, image, Tkc,
-                                    dtrack_covariance, dtrack_num_obs);
+                                    dtrack_covariance, dtrack_num_obs, dtrack_num_iters);
 
     // If tracking error is less than threshold, accept as loop closure.
     if (dtrack_error > 15.0) {

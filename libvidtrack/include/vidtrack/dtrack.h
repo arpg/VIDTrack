@@ -90,12 +90,12 @@ public:
       );
 
   ///////////////////////////////////////////////////////////////////////////
-  double Estimate(
-      bool                      use_pyramid,  // Input: Flag to enable full pyramid.
+  double Estimate(bool                      use_pyramid,  // Input: Flag to enable full pyramid.
       const cv::Mat&            live_grey,    // Input: Live image (unsigned char format).
       Sophus::SE3d&             Trl,          // Input/Output: Transform between grey cameras (vision frame/input is hint).
       Eigen::Matrix6d&          covariance,   // Output: Covariance.
-      unsigned int&             num_obs);
+      unsigned int&             number_obs,
+      unsigned int&             number_iters);
 
   ///////////////////////////////////////////////////////////////////////////
   void BuildProblem(const Sophus::SE3d& Trl,
