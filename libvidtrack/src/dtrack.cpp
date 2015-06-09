@@ -924,6 +924,18 @@ void DTrack::BuildProblem(
   }
 }
 
+void DTrack::BuildPyramid(const cv::Mat& live_grey) {
+#if 1
+  cv::Mat live_grey_copy = live_grey.clone();
+  _BrightnessCorrectionImagePair(live_grey_copy.data,
+                                 ref_grey_pyramid_[0].data,
+                                 live_grey_copy.cols * live_grey_copy.rows);
+  cv::buildPyramid(live_grey_copy, live_grey_pyramid_, kPyramidLevels);
+#else
+  cv::buildPyramid(live_grey, live_grey_pyramid_, kPyramidLevels);
+#endif
+}
+
 ///////////////////////////////////////////////////////////////////////////
 double DTrack::Estimate(
     bool                      use_pyramid,
@@ -960,15 +972,7 @@ double DTrack::Estimate(
   CHECK_GE(vec_max_iterations.size(), kPyramidLevels);
 
   // Build live pyramid.
-#if 1
-  cv::Mat live_grey_copy = live_grey.clone();
-  _BrightnessCorrectionImagePair(live_grey_copy.data,
-                                 ref_grey_pyramid_[0].data,
-                                 live_grey_copy.cols*live_grey_copy.rows);
-  cv::buildPyramid(live_grey_copy, live_grey_pyramid_, kPyramidLevels);
-#else
-  cv::buildPyramid(live_grey, live_grey_pyramid_, kPyramidLevels);
-#endif
+  BuildPyramid(live_grey);
 
   // Aux variables.
   Eigen::Matrix6d   LHS;
