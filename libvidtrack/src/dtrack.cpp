@@ -613,8 +613,8 @@ void DTrack::ComputeGradient(uint pyramid_lvl) {
   // Pre-calculate gradients so we don't do it each iteration.
   gradient_x_live_.create(live_grey_img.rows, live_grey_img.cols, CV_32FC1);
   gradient_y_live_.create(live_grey_img.rows, live_grey_img.cols, CV_32FC1);
-  gradient_x_ref_.create(live_grey_img.rows, live_grey_img.cols, CV_32FC1);
-  gradient_y_ref_.create(live_grey_img.rows, live_grey_img.cols, CV_32FC1);
+  gradient_x_ref_.create(ref_grey_img.rows, ref_grey_img.cols, CV_32FC1);
+  gradient_y_ref_.create(ref_grey_img.rows, ref_grey_img.cols, CV_32FC1);
   _CalculateGradients(
         live_grey_img.data, live_grey_img.cols, live_grey_img.rows,
         reinterpret_cast<float*>(gradient_x_live_.data),
