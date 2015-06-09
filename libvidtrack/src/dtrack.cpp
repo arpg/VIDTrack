@@ -575,6 +575,12 @@ void DTrack::SetParams(
 }
 
 ///////////////////////////////////////////////////////////////////////////
+void DTrack::SetOptions(const DTrack::Options &options) {
+  options_ = options;
+  FLAGS_semi_dense = options_.do_semi_dense_tracking;
+}
+
+///////////////////////////////////////////////////////////////////////////
 void DTrack::SetKeyframe(
     const cv::Mat& ref_grey,  // Input: Reference image (float format, normalized).
     const cv::Mat& ref_depth  // Input: Reference depth (float format, meters).
