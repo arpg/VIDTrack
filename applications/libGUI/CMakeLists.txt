@@ -1,4 +1,3 @@
-cmake_policy(SET CMP0042 OLD)
 
 find_package(Eigen3 REQUIRED)
 find_package(Pangolin 0.1 REQUIRED)

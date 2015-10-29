@@ -185,13 +185,11 @@ int main(int argc, char** argv)
     exit(EXIT_FAILURE);
   }
   hal::IMU imu(cl_args.follow("", "-imu"));
-  if (use_map == false) {
-    using std::placeholders::_1;
-    std::function<void (pb::ImuMsg&)> callback
+  using std::placeholders::_1;
+  std::function<void (pb::ImuMsg&)> callback
                       = std::bind(IMU_Handler, _1, &vid_tracker);
-    imu.RegisterIMUDataCallback(callback);
-    std::cout << "- Registering IMU device." << std::endl;
-  }
+  imu.RegisterIMUDataCallback(callback);
+  std::cout << "- Registering IMU device." << std::endl;
 
   ///----- Set up GUI.
   pangolin::CreateGlutWindowAndBind("VIDTrack", 1600, 800);

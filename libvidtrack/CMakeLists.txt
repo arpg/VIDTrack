@@ -1,4 +1,3 @@
-cmake_policy(SET CMP0042 OLD)
 
 include(def_library)
 include(export_package)
@@ -12,7 +11,7 @@ option(BUILD_SHARED_LIBS "Build Shared Library" ON)
 find_package(MINIGLOG REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(Sophus REQUIRED)
-find_package(OpenCV2 REQUIRED)
+find_package(OpenCV REQUIRED)
 find_package(Calibu 0.1 REQUIRED)
 find_package(BA REQUIRED)
 
@@ -48,7 +47,7 @@ list(APPEND VIDTRACK_INC_DIRS
     ${MINIGLOG_INCLUDE_DIRS}
     ${EIGEN3_INCLUDE_DIR}
     ${Sophus_INCLUDE_DIR}
-    ${OpenCV2_INCLUDE_DIR}
+    ${OpenCV_INCLUDE_DIR}
     ${Calibu_INCLUDE_DIRS}
     ${BA_INCLUDE_DIRS}
    )
@@ -73,7 +72,7 @@ list(APPEND VIDTRACK_LINK_DIRS
 # Append all libraries.
 list(APPEND VIDTRACK_LIBS
     ${MINIGLOG_LIBRARIES}
-    ${OpenCV2_LIBRARIES}
+    ${OpenCV_LIBRARIES}
     ${Calibu_LIBRARIES}
     ${BA_LIBRARIES}
    )

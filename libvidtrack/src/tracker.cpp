@@ -206,7 +206,7 @@ void Tracker::ConfigureDTrack(
 
     // Add initial pose to BA.
     ba::PoseT<double> initial_pose;
-    initial_pose.SetZero();
+    //initial_pose.SetZero();
     initial_pose.t_wp = Sophus::SE3d();
     initial_pose.time = time + kTimeOffset;
     ba_window_.push_back(initial_pose);
