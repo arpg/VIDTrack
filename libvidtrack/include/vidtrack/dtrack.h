@@ -63,6 +63,7 @@ class DTrack
 public:
   struct Options {
     bool optimize_wrt_depth_camera = false;
+    bool do_semi_dense_tracking = false;
   };
 
   ///////////////////////////////////////////////////////////////////////////
@@ -79,9 +80,7 @@ public:
       const Sophus::SE3d&       Tgd           // Input: Grey-Depth camera transform.
     );
 
-  void SetOptions(const Options& options) {
-    options_ = options;
-  }
+  void SetOptions(const Options& options);
 
   ///////////////////////////////////////////////////////////////////////////
   void SetKeyframe(
@@ -104,6 +103,9 @@ public:
                     double&             squared_error,
                     double&             number_observations,
                     uint                pyramid_lvl);
+
+  ///////////////////////////////////////////////////////////////////////////
+  void BuildPyramid(const cv::Mat &live_grey);
 
   ///////////////////////////////////////////////////////////////////////////
   void ComputeGradient(uint pyramid_lvl);

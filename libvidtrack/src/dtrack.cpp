@@ -575,6 +575,12 @@ void DTrack::SetParams(
 }
 
 ///////////////////////////////////////////////////////////////////////////
+void DTrack::SetOptions(const DTrack::Options &options) {
+  options_ = options;
+  FLAGS_semi_dense = options_.do_semi_dense_tracking;
+}
+
+///////////////////////////////////////////////////////////////////////////
 void DTrack::SetKeyframe(
     const cv::Mat& ref_grey,  // Input: Reference image (float format, normalized).
     const cv::Mat& ref_depth  // Input: Reference depth (float format, meters).
@@ -613,8 +619,8 @@ void DTrack::ComputeGradient(uint pyramid_lvl) {
   // Pre-calculate gradients so we don't do it each iteration.
   gradient_x_live_.create(live_grey_img.rows, live_grey_img.cols, CV_32FC1);
   gradient_y_live_.create(live_grey_img.rows, live_grey_img.cols, CV_32FC1);
-  gradient_x_ref_.create(live_grey_img.rows, live_grey_img.cols, CV_32FC1);
-  gradient_y_ref_.create(live_grey_img.rows, live_grey_img.cols, CV_32FC1);
+  gradient_x_ref_.create(ref_grey_img.rows, ref_grey_img.cols, CV_32FC1);
+  gradient_y_ref_.create(ref_grey_img.rows, ref_grey_img.cols, CV_32FC1);
   _CalculateGradients(
         live_grey_img.data, live_grey_img.cols, live_grey_img.rows,
         reinterpret_cast<float*>(gradient_x_live_.data),
@@ -924,6 +930,18 @@ void DTrack::BuildProblem(
   }
 }
 
+void DTrack::BuildPyramid(const cv::Mat& live_grey) {
+#if 1
+  cv::Mat live_grey_copy = live_grey.clone();
+  _BrightnessCorrectionImagePair(live_grey_copy.data,
+                                 ref_grey_pyramid_[0].data,
+                                 live_grey_copy.cols * live_grey_copy.rows);
+  cv::buildPyramid(live_grey_copy, live_grey_pyramid_, kPyramidLevels);
+#else
+  cv::buildPyramid(live_grey, live_grey_pyramid_, kPyramidLevels);
+#endif
+}
+
 ///////////////////////////////////////////////////////////////////////////
 double DTrack::Estimate(
     bool                      use_pyramid,
@@ -960,15 +978,7 @@ double DTrack::Estimate(
   CHECK_GE(vec_max_iterations.size(), kPyramidLevels);
 
   // Build live pyramid.
-#if 1
-  cv::Mat live_grey_copy = live_grey.clone();
-  _BrightnessCorrectionImagePair(live_grey_copy.data,
-                                 ref_grey_pyramid_[0].data,
-                                 live_grey_copy.cols*live_grey_copy.rows);
-  cv::buildPyramid(live_grey_copy, live_grey_pyramid_, kPyramidLevels);
-#else
-  cv::buildPyramid(live_grey, live_grey_pyramid_, kPyramidLevels);
-#endif
+  BuildPyramid(live_grey);
 
   // Aux variables.
   Eigen::Matrix6d   LHS;
